@@ -22,17 +22,7 @@
   <div id="blocker">
     <div id="instructions">
       <div id="menu-content">
-        <h2>Choisissez votre classe</h2>
-        <div class="class-selection">
-          <button id="btnWarrior">Guerrier</button>
-          <button id="btnMage">Mage</button>
-        </div>
-        <div style="margin-top:12px">
-          <input id="roomCode" placeholder="Code de room (ex: ABCD)" maxlength="12" />
-          <button id="btnCreate">Créer</button>
-          <button id="btnJoin">Rejoindre</button>
-        </div>
-        <p style="margin-top:20px;">Appuyez sur Échap pour changer de classe.</p>
+        <!-- Le contenu du menu est généré dynamiquement -->
       </div>
     </div>
   </div>
@@ -239,32 +229,8 @@
 
       controls = new PointerLockControls(camera, document.body);
       const blocker = document.getElementById('blocker');
-      const menuContent = document.getElementById('menu-content');
-
-      function setupMenuListeners(){
-        document.getElementById('btnWarrior').addEventListener('click', (e)=>selectClass(e,'warrior'));
-        document.getElementById('btnMage').addEventListener('click', (e)=>selectClass(e,'mage'));
-      }
-
-      function setupRoomListeners(){
-        const roomInput = document.getElementById('roomCode');
-        document.getElementById('btnCreate').addEventListener('click', async (e)=>{
-          e.stopPropagation();
-          const code = (roomInput.value || randomCode()).toUpperCase();
-          await joinRoom(code);
-          alert(`Room créée: ${code}`);
-        });
-        document.getElementById('btnJoin').addEventListener('click', async (e)=>{
-          e.stopPropagation();
-          const code = (roomInput.value || '').toUpperCase();
-          if (!code) return alert('Entre un code de room.');
-          await joinRoom(code);
-          alert(`Rejoint room: ${code}`);
-        });
-      }
-
-      setupMenuListeners();
-      setupRoomListeners();
+      
+      buildMainMenu(); // Construit le menu initial
 
       blocker.addEventListener('click', (event) => { 
         if (event.target === blocker && playerClass) {
@@ -282,18 +248,7 @@
         blocker.style.display = 'flex';
         crosshair.style.display = 'none';
         healthBarContainer.style.display = 'none';
-        
-        if (playerHealth <= 0) {
-            menuContent.innerHTML = `
-              <h2>Vous êtes mort.</h2>
-              <p>Choisissez une classe pour réapparaître.</p>
-              <div class="class-selection">
-                <button id="btnWarrior">Guerrier</button>
-                <button id="btnMage">Mage</button>
-              </div>
-            `;
-            setupMenuListeners();
-        }
+        buildMainMenu(playerHealth <= 0); // Reconstruit le menu en cas de pause ou de mort
       });
 
       document.addEventListener('pointerlockerror', () => console.error('Pointer Lock Error'), false);
@@ -308,6 +263,51 @@
       window.addEventListener('resize', onWindowResize);
       document.addEventListener('contextmenu', (e)=>e.preventDefault());
     }
+    
+    function buildMainMenu(isDeath = false) {
+        const menuContent = document.getElementById('menu-content');
+        const title = isDeath ? "Vous êtes mort." : "Menu Principal";
+        const subtitle = isDeath ? "Choisissez une classe pour réapparaître." : "Choisissez votre classe ou rejoignez une partie.";
+
+        menuContent.innerHTML = `
+          <h2>${title}</h2>
+          <p>${subtitle}</p>
+          <div class="class-selection">
+            <button id="btnWarrior">Guerrier</button>
+            <button id="btnMage">Mage</button>
+          </div>
+          <div style="margin-top:12px">
+            <input id="roomCode" placeholder="Code de room (ex: ABCD)" maxlength="12" />
+            <button id="btnCreate">Créer</button>
+            <button id="btnJoin">Rejoindre</button>
+          </div>
+          <p style="margin-top:20px;">Appuyez sur Échap pour retourner au jeu.</p>
+        `;
+        setupMenuListeners();
+        setupRoomListeners();
+    }
+    
+    function setupMenuListeners(){
+      document.getElementById('btnWarrior').addEventListener('click', (e)=>selectClass(e,'warrior'));
+      document.getElementById('btnMage').addEventListener('click', (e)=>selectClass(e,'mage'));
+    }
+
+    function setupRoomListeners(){
+      const roomInput = document.getElementById('roomCode');
+      document.getElementById('btnCreate').addEventListener('click', async (e)=>{
+        e.stopPropagation();
+        const code = (roomInput.value || randomCode()).toUpperCase();
+        await joinRoom(code);
+        alert(`Room créée: ${code}`);
+      });
+      document.getElementById('btnJoin').addEventListener('click', async (e)=>{
+        e.stopPropagation();
+        const code = (roomInput.value || '').toUpperCase();
+        if (!code) return alert('Entre un code de room.');
+        await joinRoom(code);
+        alert(`Rejoint room: ${code}`);
+      });
+    }
 
     function selectClass(event, chosenClass){
       event.stopPropagation();
@@ -316,6 +316,10 @@
       updateHealthUI();
       cleanupPlayerModel();
       createPlayerModel(playerClass);
+      
+      // Respawn au point de départ
+      controls.getObject().position.set(0, PLAYER_HEIGHT, 5);
+      playerVelocity.set(0,0,0);
 
       const menuContent = document.getElementById('menu-content');
       menuContent.innerHTML = `
@@ -338,7 +342,9 @@
       }
       replicatedObjects.forEach((obj, id) => {
           if (obj.ownerId === myId) {
-             destroyReplicatedObject(id);
+             const payload = { eventType: 'destroy', objectId: id, ownerId: myId };
+             handleGameEvent(payload);
+             channel.send({ type: 'broadcast', event: 'game_event', payload });
           }
       });
     }
@@ -519,7 +525,7 @@
                     newObject.scale.set(1,0.01,1);
                     const duration=200, start=performance.now();
                     (function grow(){
-                      if (!replicatedObjects.has(objectId)) return; // Stop if destroyed
+                      if (!replicatedObjects.has(objectId)) return;
                       const t = Math.min((performance.now()-start)/duration,1);
                       newObject.scale.y = t;
                       if (t<1) requestAnimationFrame(grow);
@@ -539,9 +545,10 @@
                     objects.push(newObject);
                     replicatedObjects.set(objectId, newObject);
                     setTimeout(() => {
-                        if (ownerId === myId) { // Seul le propriétaire demande la destruction
-                           channel.send({ type: 'broadcast', event: 'game_event', payload: { eventType: 'destroy', objectId } });
-                           destroyReplicatedObject(objectId);
+                        if (ownerId === myId) {
+                           const destroyPayload = { eventType: 'destroy', objectId: objectId, ownerId: myId };
+                           handleGameEvent(destroyPayload);
+                           channel.send({ type: 'broadcast', event: 'game_event', payload: destroyPayload });
                         }
                     }, data.lifetime);
                 }
@@ -559,7 +566,7 @@
         const duration=500, start=performance.now();
         (function fade(){
             const t = Math.min((performance.now()-start)/duration,1);
-            if(obj.material) obj.material.opacity = (obj.material.opacity || 1) * (1-t);
+            if(obj.material && obj.material.opacity !== undefined) obj.material.opacity = (obj.material.opacity || 1) * (1-t);
             if (t<1) requestAnimationFrame(fade);
             else {
               scene.remove(obj);
@@ -692,12 +699,11 @@
 
     function updateProjectiles(delta){
         replicatedObjects.forEach((obj, id) => {
-            if (!obj.velocity) return; // Ne s'applique qu'aux projectiles
+            if (!obj.velocity) return; 
 
             obj.position.add(obj.velocity.clone().multiplyScalar(delta));
             let remove = false;
 
-            // Collision avec les murs de glace
             replicatedObjects.forEach(otherObj => {
                 if (otherObj.name === 'iceWall') {
                     const wallBB = new THREE.Box3().setFromObject(otherObj);
@@ -706,7 +712,6 @@
                 }
             });
 
-            // Collision avec la cible d'entraînement
             const target = scene.getObjectByName('target');
             if (target && obj.position.distanceTo(target.position) < 1.5){
               target.material.color.set(0x00ff00);
@@ -714,19 +719,17 @@
               remove = true;
             }
             
-            // Collision avec les autres joueurs
             peerAvatars.forEach((avatar, peerId) => {
-                if (obj.ownerId === peerId) return; // Ne pas se toucher soi-même
+                if (obj.ownerId === peerId) return;
                 const avatarBB = new THREE.Box3().setFromObject(avatar.mesh);
                 if (avatarBB.containsPoint(obj.position)) {
-                    if (obj.ownerId === myId) { // Seul le propriétaire du projectile envoie l'événement de hit
+                    if (obj.ownerId === myId) {
                        channel.send({ type: 'broadcast', event: 'hit', payload: { targetId: peerId, damage: 10 } });
                     }
                     remove = true;
                 }
             });
             
-            // Collision avec le joueur local
             const playerCollider = new THREE.Box3().setFromCenterAndSize(controls.getObject().position, new THREE.Vector3(0.8, PLAYER_HEIGHT, 0.8));
             if(playerCollider.containsPoint(obj.position) && obj.ownerId !== myId) {
                 takeDamage(10);
@@ -742,8 +745,7 @@
     }
 
     function updatePlayer(delta){
-      // --- Mouvement Vertical (Gravité) - Toujours appliqué ---
-      if (controls.getObject().position.y > PLAYER_HEIGHT || playerVelocity.y < 0) {
+      if (playerVelocity.y !== 0 || !canJump) {
           playerVelocity.y -= GRAVITY * delta;
           controls.getObject().position.y += playerVelocity.y * delta;
       }
@@ -755,9 +757,8 @@
 
       if (!controls.isLocked) return;
 
-      // --- Mouvement Horizontal (Style Minecraft) ---
       const moveDirection = new THREE.Vector3(
-        Number(moveRight) - Number(moveLeft), 0, Number(moveForward) - Number(moveBackward)
+        Number(moveRight) - Number(moveLeft), 0, Number(moveBackward) - Number(moveForward)
       );
 
       const deceleration = (PLAYER_SPEED / DECELERATION_TIME) * delta;
@@ -779,7 +780,7 @@
       
       if (isDashing){
         const dashImpulse = new THREE.Vector3(
-             (Number(moveRight) - Number(moveLeft)), 0, (Number(moveForward) - Number(moveBackward))
+             (Number(moveRight) - Number(moveLeft)), 0, (Number(moveBackward) - Number(moveForward))
         );
         if(dashImpulse.lengthSq() === 0) dashImpulse.z = 1;
         dashImpulse.applyQuaternion(camera.quaternion).normalize();
@@ -787,44 +788,41 @@
         isDashing = false;
       }
       
-      const finalMove = new THREE.Vector3();
-      finalMove.copy(playerVelocity).applyQuaternion(camera.quaternion);
-
-      // --- Collision ---
+      const finalMove = new THREE.Vector3(playerVelocity.x, 0, playerVelocity.z).applyQuaternion(camera.quaternion);
+      
       const originalPosition = controls.getObject().position.clone();
       const newPosition = originalPosition.clone();
       
-      // Test X
-      newPosition.x += finalMove.x * delta;
+      const step = finalMove.clone().multiplyScalar(delta);
+
+      // Collision X
+      newPosition.x += step.x;
       let playerCollider = new THREE.Box3().setFromCenterAndSize(newPosition, new THREE.Vector3(0.8, PLAYER_HEIGHT, 0.8));
       let collidedX = false;
-       for (const object of objects){
-        if (object === floor || (object.isGroup && peerAvatars.has(Array.from(peerAvatars).find(p => p[1].mesh === object)?.[0]))) continue;
-        const bb = new THREE.Box3().setFromObject(object);
-        if (playerCollider.intersectsBox(bb)){ collidedX = true; break; }
+      for (const object of objects) {
+          if (object === floor || object.isGroup) continue;
+          if (playerCollider.intersectsBox(new THREE.Box3().setFromObject(object))) { collidedX = true; break; }
       }
-      if(collidedX) newPosition.x = originalPosition.x;
+      if (collidedX) newPosition.x = originalPosition.x;
 
-      // Test Z
-      newPosition.z += finalMove.z * delta;
+      // Collision Z
+      newPosition.z += step.z;
       playerCollider.setFromCenterAndSize(newPosition, new THREE.Vector3(0.8, PLAYER_HEIGHT, 0.8));
       let collidedZ = false;
-       for (const object of objects){
-        if (object === floor || (object.isGroup && peerAvatars.has(Array.from(peerAvatars).find(p => p[1].mesh === object)?.[0]))) continue;
-        const bb = new THREE.Box3().setFromObject(object);
-        if (playerCollider.intersectsBox(bb)){ collidedZ = true; break; }
+      for (const object of objects) {
+          if (object === floor || object.isGroup) continue;
+          if (playerCollider.intersectsBox(new THREE.Box3().setFromObject(object))) { collidedZ = true; break; }
       }
-      if(collidedZ) newPosition.z = originalPosition.z;
+      if (collidedZ) newPosition.z = originalPosition.z;
 
       controls.getObject().position.copy(newPosition);
-
     }
 
     function animate(){
       requestAnimationFrame(animate);
       const delta = clock.getDelta();
 
-      if (playerClass) updatePlayer(delta); // La logique interne de updatePlayer gère si le jeu est en pause ou non
+      if (playerClass) updatePlayer(delta);
       updateProjectiles(delta);
 
       peerAvatars.forEach((avatar, id) => {
