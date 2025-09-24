@@ -65,6 +65,7 @@
     const myId = crypto.randomUUID();
     const peers = new Map();
     const peerAvatars = new Map();
+    const replicatedObjects = new Map();
 
     function randomCode(){ return Math.random().toString(36).slice(2,6).toUpperCase(); }
     
@@ -111,7 +112,7 @@
 
         avatarGroup.position.set(pos.x, pos.y - PLAYER_HEIGHT + 1.1, pos.z);
         scene.add(avatarGroup);
-        objects.push(avatarGroup); // Ajout pour la collision
+        objects.push(avatarGroup);
         return { mesh: avatarGroup, lastAction: 'idle' };
     }
 
@@ -126,6 +127,21 @@
       if (channel) await supabase.removeChannel(channel);
 
       channel = supabase.channel(`room:${code}`, { config: { presence: { key: myId } } });
+      
+      channel.on('presence', { event: 'join' }, ({ newPresences }) => {
+          for (const pres of newPresences) {
+              if (pres.key !== myId) {
+                  replicatedObjects.forEach(obj => {
+                      if (obj.ownerId === myId) {
+                          channel.send({
+                              type: 'broadcast', event: 'game_event',
+                              payload: obj.getSpawnPayload()
+                          });
+                      }
+                  });
+              }
+          }
+      });
 
       channel.on('presence', { event: 'leave' }, ({ leftPresences }) => {
         for (const pres of leftPresences) {
@@ -143,6 +159,11 @@
           if (payload.targetId === myId) {
               takeDamage(payload.damage);
           }
+      });
+
+      channel.on('broadcast', { event: 'game_event' }, ({ payload }) => {
+        if(payload.ownerId === myId) return;
+        handleGameEvent(payload);
       });
 
       channel.on('broadcast', { event:'state' }, ({ payload }) => {
@@ -168,23 +189,22 @@
     // === Three.js / jeu ===
     let scene, camera, renderer, controls;
     let playerVelocity = new THREE.Vector3();
-    let playerDirection = new THREE.Vector3();
     let moveForward=false, moveBackward=false, moveLeft=false, moveRight=false, canJump=false;
     let objects = [];
     let playerClass = null;
     let playerHealth = 100;
 
-    // ... (variables de classe)
     let isAttacking=false, lastAttackTime=0, isBlocking=false, isDashing=false, lastDashTime=0;
     const attackCooldown=100, dashCooldown=1500;
-    let activeFireballs=[], lastFireballTime=0, heldFireball=null, iceWall=null;
-    const fireballCooldown=1000, iceWallCooldown=10000, iceWallDuration=5000, blinkCooldown=3000;
+    let lastFireballTime=0, heldFireball=null;
+    const fireballCooldown=1000, iceWallCooldown=10000, blinkCooldown=3000;
     let lastIceWallTime=0, lastBlinkTime=0;
     
     let swordGroup, rightArm, leftArm, shield, floor;
     let initialSwordRotation, initialLeftArmPosition, initialLeftArmRotation;
 
-    const PLAYER_SPEED=60.0, PLAYER_HEIGHT=1.8, GRAVITY=30.0, JUMP_VELOCITY=10.0, DASH_STRENGTH=35.0, BLINK_DISTANCE=8.0;
+    const PLAYER_SPEED=8.0, PLAYER_HEIGHT=1.8, GRAVITY=30.0, JUMP_VELOCITY=10.0, DASH_STRENGTH=20.0, BLINK_DISTANCE=8.0;
+    const DECELERATION_TIME = 0.5;
 
     const clock = new THREE.Clock();
     const crosshair = document.getElementById('crosshair');
@@ -263,7 +283,6 @@
         crosshair.style.display = 'none';
         healthBarContainer.style.display = 'none';
         
-        // On ne réaffiche le menu que si le joueur est mort
         if (playerHealth <= 0) {
             menuContent.innerHTML = `
               <h2>Vous êtes mort.</h2>
@@ -304,8 +323,7 @@
         <p style="font-size:1.5rem; margin-top:30px;">Cliquez pour commencer</p>
       `;
     }
-
-    // ... (cleanupPlayerModel, createPlayerModel, createWorld)
+    
     function cleanupPlayerModel(){
       if (rightArm){
         if (swordGroup) rightArm.remove(swordGroup);
@@ -318,11 +336,11 @@
         camera.remove(leftArm);
         shield=null; leftArm=null;
       }
-      if (iceWall){
-        scene.remove(iceWall);
-        objects = objects.filter(o=>o!==iceWall);
-        iceWall=null;
-      }
+      replicatedObjects.forEach((obj, id) => {
+          if (obj.ownerId === myId) {
+             destroyReplicatedObject(id);
+          }
+      });
     }
 
     function createPlayerModel(className){
@@ -410,7 +428,7 @@
     }
 
     function takeDamage(amount) {
-        if (playerHealth <= 0) return;
+        if (playerHealth <= 0 || (playerClass === 'warrior' && isBlocking)) return;
         playerHealth -= amount;
         updateHealthUI();
         if (playerHealth <= 0) {
@@ -422,7 +440,6 @@
         controls.unlock();
     }
 
-    // ... (event listeners et fonctions de jeu)
     function onWindowResize(){ camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
 
     function onKeyDown(e){
@@ -483,56 +500,124 @@
       const blinkVector = direction.multiplyScalar(BLINK_DISTANCE);
       controls.getObject().position.add(blinkVector);
     }
+    
+    function handleGameEvent(payload) {
+        const { eventType, objectId, objectType, data, ownerId } = payload;
+        switch(eventType) {
+            case 'spawn':
+                if (replicatedObjects.has(objectId)) return;
+                
+                let newObject;
+                if (objectType === 'iceWall') {
+                    const wallGeometry = new THREE.BoxGeometry(8,5,0.5);
+                    const wallMaterial = new THREE.MeshStandardMaterial({ color:0xadd8e6, opacity:0.8, transparent:true, metalness:0.2, roughness:0.1 });
+                    newObject = new THREE.Mesh(wallGeometry, wallMaterial);
+                    newObject.name = 'iceWall';
+                    newObject.position.copy(data.position);
+                    newObject.quaternion.copy(data.quaternion);
+                    
+                    newObject.scale.set(1,0.01,1);
+                    const duration=200, start=performance.now();
+                    (function grow(){
+                      if (!replicatedObjects.has(objectId)) return; // Stop if destroyed
+                      const t = Math.min((performance.now()-start)/duration,1);
+                      newObject.scale.y = t;
+                      if (t<1) requestAnimationFrame(grow);
+                    })();
+                } else if (objectType === 'fireball') {
+                    const fireballGeometry = new THREE.SphereGeometry(0.2,16,16);
+                    const fireballMaterial = new THREE.MeshStandardMaterial({ color:0xff4500, emissive:0xff6600, emissiveIntensity:1.5 });
+                    newObject = new THREE.Mesh(fireballGeometry, fireballMaterial);
+                    newObject.position.copy(data.position);
+                    newObject.velocity = new THREE.Vector3().copy(data.velocity);
+                }
 
-    function castIceWall(){
-      if (iceWall) return;
-      const wallGeometry = new THREE.BoxGeometry(8,5,0.5);
-      const wallMaterial = new THREE.MeshStandardMaterial({ color:0xadd8e6, opacity:0.8, transparent:true, metalness:0.2, roughness:0.1 });
-      iceWall = new THREE.Mesh(wallGeometry, wallMaterial); iceWall.name='iceWall';
-      const dir = new THREE.Vector3(); camera.getWorldDirection(dir); dir.y=0; dir.normalize();
-      const wallPos = controls.getObject().position.clone().add(dir.multiplyScalar(4)); wallPos.y = 2.5;
-      iceWall.position.copy(wallPos);
-      iceWall.lookAt(controls.getObject().position.x, 2.5, controls.getObject().position.z);
-      scene.add(iceWall); objects.push(iceWall);
-
-      iceWall.scale.set(1,0.01,1);
-      const duration=200, start=performance.now();
-      (function grow(){
-        const t = Math.min((performance.now()-start)/duration,1);
-        iceWall.scale.y = t;
-        if (t<1) requestAnimationFrame(grow);
-      })();
-
-      setTimeout(destroyIceWall, iceWallDuration);
+                if (newObject) {
+                    newObject.ownerId = ownerId;
+                    newObject.getSpawnPayload = () => ({ eventType: 'spawn', objectId, objectType, ownerId, data });
+                    scene.add(newObject);
+                    objects.push(newObject);
+                    replicatedObjects.set(objectId, newObject);
+                    setTimeout(() => {
+                        if (ownerId === myId) { // Seul le propriétaire demande la destruction
+                           channel.send({ type: 'broadcast', event: 'game_event', payload: { eventType: 'destroy', objectId } });
+                           destroyReplicatedObject(objectId);
+                        }
+                    }, data.lifetime);
+                }
+                break;
+            case 'destroy':
+                destroyReplicatedObject(objectId);
+                break;
+        }
     }
 
-    function destroyIceWall(){
-      if (!iceWall) return;
-      const duration=500, start=performance.now();
-      (function fade(){
-        const t = Math.min((performance.now()-start)/duration,1);
-        if (iceWall){
-          iceWall.material.opacity = 0.8 * (1-t);
-          if (t<1) requestAnimationFrame(fade);
-          else {
-            scene.remove(iceWall);
-            objects = objects.filter(o=>o!==iceWall);
-            iceWall=null;
-          }
-        }
-      })();
+    function destroyReplicatedObject(objectId) {
+        if (!replicatedObjects.has(objectId)) return;
+        const obj = replicatedObjects.get(objectId);
+        
+        const duration=500, start=performance.now();
+        (function fade(){
+            const t = Math.min((performance.now()-start)/duration,1);
+            if(obj.material) obj.material.opacity = (obj.material.opacity || 1) * (1-t);
+            if (t<1) requestAnimationFrame(fade);
+            else {
+              scene.remove(obj);
+              objects = objects.filter(o => o !== obj);
+              replicatedObjects.delete(objectId);
+            }
+        })();
+    }
+
+    function castIceWall(){
+        const wallId = `icewall-${myId}-${Date.now()}`;
+        const dir = new THREE.Vector3(); camera.getWorldDirection(dir); dir.y=0; dir.normalize();
+        const wallPos = controls.getObject().position.clone().add(dir.multiplyScalar(4)); wallPos.y = 2.5;
+        
+        const tempWall = new THREE.Object3D();
+        tempWall.position.copy(wallPos);
+        tempWall.lookAt(controls.getObject().position.x, 2.5, controls.getObject().position.z);
+
+        const payload = {
+            eventType: 'spawn',
+            objectId: wallId,
+            objectType: 'iceWall',
+            ownerId: myId,
+            data: {
+              position: tempWall.position,
+              quaternion: tempWall.quaternion,
+              lifetime: 5000
+            }
+        };
+        handleGameEvent(payload);
+        channel.send({ type: 'broadcast', event: 'game_event', payload });
     }
 
     function castFireball(){
       if (!heldFireball) return;
-      const projectile = heldFireball.clone();
+
+      const projectileId = `fireball-${myId}-${Date.now()}`;
       const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
-      const startPos = new THREE.Vector3(); camera.getWorldPosition(startPos);
-      projectile.position.copy(startPos).add(dir.clone().multiplyScalar(1.5));
-      projectile.velocity = dir.normalize().multiplyScalar(35);
-      projectile.lifetime = 3;
-      scene.add(projectile);
-      activeFireballs.push(projectile);
+      const startPos = new THREE.Vector3();
+      camera.getWorldPosition(startPos);
+      const position = startPos.add(dir.clone().multiplyScalar(1.5));
+      const velocity = dir.normalize().multiplyScalar(35);
+
+      const payload = {
+          eventType: 'spawn',
+          objectId: projectileId,
+          objectType: 'fireball',
+          ownerId: myId,
+          data: {
+            position: position,
+            velocity: velocity,
+            lifetime: 3000
+          }
+      };
+
+      handleGameEvent(payload);
+      channel.send({ type: 'broadcast', event: 'game_event', payload });
+
       heldFireball.visible = false;
       setTimeout(()=>{ if (heldFireball) heldFireball.visible = true; }, 200);
     }
@@ -591,120 +676,155 @@
       const swordTip = new THREE.Vector3(0.6,-0.2,-2.5);
       const worldPos = swordTip.applyMatrix4(camera.matrixWorld);
       
-      // Hit contre la cible d'entraînement
       const target = scene.getObjectByName('target');
       if (target && worldPos.distanceTo(target.position) < 1.5){
           target.material.color.set(0x00ff00);
           setTimeout(()=>target.material.color.set(0xff0000), 300);
       }
       
-      // Hit contre les autres joueurs
       peerAvatars.forEach((avatar, id) => {
         const distance = worldPos.distanceTo(avatar.mesh.position);
-        if (distance < 2.0) { // Rayon de l'attaque
+        if (distance < 2.0) {
             channel.send({ type: 'broadcast', event: 'hit', payload: { targetId: id, damage: 10 } });
         }
       });
     }
 
     function updateProjectiles(delta){
-      for (let i=activeFireballs.length-1; i>=0; i--){
-        const fb = activeFireballs[i];
-        fb.position.add(fb.velocity.clone().multiplyScalar(delta));
-        fb.lifetime -= delta;
-        let remove = false;
+        replicatedObjects.forEach((obj, id) => {
+            if (!obj.velocity) return; // Ne s'applique qu'aux projectiles
 
-        if (iceWall && (new THREE.Box3().setFromObject(iceWall)).intersectsBox(new THREE.Box3().setFromObject(fb))) {
-            remove = true;
-        }
+            obj.position.add(obj.velocity.clone().multiplyScalar(delta));
+            let remove = false;
 
-        const target = scene.getObjectByName('target');
-        if (target && fb.position.distanceTo(target.position) < 1.5){
-          target.material.color.set(0x00ff00);
-          setTimeout(()=>target.material.color.set(0xff0000), 300);
-          remove = true;
-        }
-        
-        peerAvatars.forEach((avatar, id) => {
-            const avatarBB = new THREE.Box3().setFromObject(avatar.mesh);
-            if (avatarBB.containsPoint(fb.position)) {
-                channel.send({ type: 'broadcast', event: 'hit', payload: { targetId: id, damage: 10 } });
+            // Collision avec les murs de glace
+            replicatedObjects.forEach(otherObj => {
+                if (otherObj.name === 'iceWall') {
+                    const wallBB = new THREE.Box3().setFromObject(otherObj);
+                    const projBB = new THREE.Box3().setFromObject(obj);
+                    if (wallBB.intersectsBox(projBB)) remove = true;
+                }
+            });
+
+            // Collision avec la cible d'entraînement
+            const target = scene.getObjectByName('target');
+            if (target && obj.position.distanceTo(target.position) < 1.5){
+              target.material.color.set(0x00ff00);
+              setTimeout(()=>target.material.color.set(0xff0000), 300);
+              remove = true;
+            }
+            
+            // Collision avec les autres joueurs
+            peerAvatars.forEach((avatar, peerId) => {
+                if (obj.ownerId === peerId) return; // Ne pas se toucher soi-même
+                const avatarBB = new THREE.Box3().setFromObject(avatar.mesh);
+                if (avatarBB.containsPoint(obj.position)) {
+                    if (obj.ownerId === myId) { // Seul le propriétaire du projectile envoie l'événement de hit
+                       channel.send({ type: 'broadcast', event: 'hit', payload: { targetId: peerId, damage: 10 } });
+                    }
+                    remove = true;
+                }
+            });
+            
+            // Collision avec le joueur local
+            const playerCollider = new THREE.Box3().setFromCenterAndSize(controls.getObject().position, new THREE.Vector3(0.8, PLAYER_HEIGHT, 0.8));
+            if(playerCollider.containsPoint(obj.position) && obj.ownerId !== myId) {
+                takeDamage(10);
                 remove = true;
             }
-        });
 
-        if (fb.lifetime <= 0) remove = true;
-        if (remove){ scene.remove(fb); activeFireballs.splice(i,1); }
-      }
+            if (remove && obj.ownerId === myId){
+                const payload = { eventType: 'destroy', objectId: id, ownerId: myId };
+                handleGameEvent(payload);
+                channel.send({ type: 'broadcast', event: 'game_event', payload });
+            }
+        });
     }
 
     function updatePlayer(delta){
+      // --- Mouvement Vertical (Gravité) - Toujours appliqué ---
+      if (controls.getObject().position.y > PLAYER_HEIGHT || playerVelocity.y < 0) {
+          playerVelocity.y -= GRAVITY * delta;
+          controls.getObject().position.y += playerVelocity.y * delta;
+      }
+      if (controls.getObject().position.y < PLAYER_HEIGHT) {
+          playerVelocity.y = 0;
+          controls.getObject().position.y = PLAYER_HEIGHT;
+          canJump = true;
+      }
+
       if (!controls.isLocked) return;
 
-      playerDirection.z = Number(moveForward) - Number(moveBackward);
-      playerDirection.x = Number(moveRight) - Number(moveLeft);
+      // --- Mouvement Horizontal (Style Minecraft) ---
+      const moveDirection = new THREE.Vector3(
+        Number(moveRight) - Number(moveLeft), 0, Number(moveForward) - Number(moveBackward)
+      );
 
-      if (isDashing){
-        const dashDir = playerDirection.clone();
-        if (dashDir.lengthSq()===0) dashDir.z = 1;
-        dashDir.normalize();
-        playerVelocity.z -= dashDir.z * DASH_STRENGTH;
-        playerVelocity.x -= dashDir.x * DASH_STRENGTH;
-        isDashing = false;
-      }
-
-      const speedDelta = PLAYER_SPEED * delta;
-      playerVelocity.x -= playerVelocity.x * 5.0 * delta;
-      playerVelocity.z -= playerVelocity.z * 5.0 * delta;
-
-      playerDirection.normalize();
-      if (moveForward || moveBackward) playerVelocity.z -= playerDirection.z * speedDelta;
-      if (moveLeft || moveRight)      playerVelocity.x -= playerDirection.x * speedDelta;
-
-      const playerCollider = new THREE.Box3();
-      const playerSize = new THREE.Vector3(0.8, PLAYER_HEIGHT, 0.8);
-      const originalPosition = controls.getObject().position.clone();
-
-      controls.moveRight(-playerVelocity.x * delta);
-      controls.moveForward(-playerVelocity.z * delta);
+      const deceleration = (PLAYER_SPEED / DECELERATION_TIME) * delta;
       
-      playerCollider.setFromCenterAndSize(controls.getObject().position, playerSize);
-      for (const object of objects){
-        if (object === floor || object.isGroup) continue; // On ignore le sol et les groupes (avatars) pour cette boucle
-        const bb = new THREE.Box3().setFromObject(object);
-        if (playerCollider.intersectsBox(bb)){
-            controls.getObject().position.copy(originalPosition); // Reset si collision mur/objet
+      if (moveDirection.lengthSq() === 0) {
+        const speed = Math.sqrt(playerVelocity.x * playerVelocity.x + playerVelocity.z * playerVelocity.z);
+        if (speed > deceleration) {
+            playerVelocity.x -= (playerVelocity.x / speed) * deceleration;
+            playerVelocity.z -= (playerVelocity.z / speed) * deceleration;
+        } else {
             playerVelocity.x = 0;
             playerVelocity.z = 0;
-            break;
         }
+      } else {
+        moveDirection.normalize().multiplyScalar(PLAYER_SPEED);
+        playerVelocity.x = moveDirection.x;
+        playerVelocity.z = moveDirection.z;
       }
       
-      // Collision entre joueurs
-      peerAvatars.forEach(avatar => {
-        const remoteCollider = new THREE.Box3().setFromObject(avatar.mesh);
-        if(playerCollider.intersectsBox(remoteCollider)) {
-            controls.getObject().position.copy(originalPosition);
-             playerVelocity.x = 0;
-            playerVelocity.z = 0;
-        }
-      });
-
-
-      playerVelocity.y -= GRAVITY * delta;
-      controls.getObject().position.y += playerVelocity.y * delta;
-      if (controls.getObject().position.y < PLAYER_HEIGHT){
-        playerVelocity.y = 0;
-        controls.getObject().position.y = PLAYER_HEIGHT;
-        canJump = true;
+      if (isDashing){
+        const dashImpulse = new THREE.Vector3(
+             (Number(moveRight) - Number(moveLeft)), 0, (Number(moveForward) - Number(moveBackward))
+        );
+        if(dashImpulse.lengthSq() === 0) dashImpulse.z = 1;
+        dashImpulse.applyQuaternion(camera.quaternion).normalize();
+        controls.getObject().position.add(dashImpulse.multiplyScalar(DASH_STRENGTH * delta));
+        isDashing = false;
       }
+      
+      const finalMove = new THREE.Vector3();
+      finalMove.copy(playerVelocity).applyQuaternion(camera.quaternion);
+
+      // --- Collision ---
+      const originalPosition = controls.getObject().position.clone();
+      const newPosition = originalPosition.clone();
+      
+      // Test X
+      newPosition.x += finalMove.x * delta;
+      let playerCollider = new THREE.Box3().setFromCenterAndSize(newPosition, new THREE.Vector3(0.8, PLAYER_HEIGHT, 0.8));
+      let collidedX = false;
+       for (const object of objects){
+        if (object === floor || (object.isGroup && peerAvatars.has(Array.from(peerAvatars).find(p => p[1].mesh === object)?.[0]))) continue;
+        const bb = new THREE.Box3().setFromObject(object);
+        if (playerCollider.intersectsBox(bb)){ collidedX = true; break; }
+      }
+      if(collidedX) newPosition.x = originalPosition.x;
+
+      // Test Z
+      newPosition.z += finalMove.z * delta;
+      playerCollider.setFromCenterAndSize(newPosition, new THREE.Vector3(0.8, PLAYER_HEIGHT, 0.8));
+      let collidedZ = false;
+       for (const object of objects){
+        if (object === floor || (object.isGroup && peerAvatars.has(Array.from(peerAvatars).find(p => p[1].mesh === object)?.[0]))) continue;
+        const bb = new THREE.Box3().setFromObject(object);
+        if (playerCollider.intersectsBox(bb)){ collidedZ = true; break; }
+      }
+      if(collidedZ) newPosition.z = originalPosition.z;
+
+      controls.getObject().position.copy(newPosition);
+
     }
 
     function animate(){
       requestAnimationFrame(animate);
       const delta = clock.getDelta();
 
-      if (playerClass && controls.isLocked) updatePlayer(delta);
+      if (playerClass) updatePlayer(delta); // La logique interne de updatePlayer gère si le jeu est en pause ou non
       updateProjectiles(delta);
 
       peerAvatars.forEach((avatar, id) => {
@@ -714,7 +834,7 @@
           
           avatar.mesh.position.lerp(new THREE.Vector3(pos.x, pos.y - PLAYER_HEIGHT + 1.1, pos.z), 0.2);
           
-          const euler = new THREE.Euler(rot.x, rot.y, rot.z, 'YXZ');
+          const euler = new THREE.Euler(0, rot.y, 0, 'YXZ');
           const quaternion = new THREE.Quaternion().setFromEuler(euler);
           avatar.mesh.quaternion.slerp(quaternion, 0.2);
 
@@ -728,7 +848,6 @@
               }
           }
       });
-
 
       const now = performance.now();
       if (channel && now - lastSend > 66 && controls.isLocked){
