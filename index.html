@@ -13,6 +13,9 @@
     .class-selection button { background:#ffa500; color:#000; border:none; padding:15px 30px; font-size:1.2rem; font-weight:bold; border-radius:10px; cursor:pointer; margin:10px; transition:background-color .2s, transform .2s; }
     .class-selection button:hover { background:#ffc864; transform:scale(1.05); }
     #crosshair { position:fixed; top:50%; left:50%; width:4px; height:4px; background:#fff; border-radius:50%; transform:translate(-50%,-50%); pointer-events:none; z-index:9; mix-blend-mode:difference; display:none; }
+    #health-bar-container { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); width:300px; height:30px; background:rgba(0,0,0,0.5); border:2px solid #fff; border-radius:15px; display:none; z-index:9; }
+    #health-bar { width:100%; height:100%; background:linear-gradient(90deg, #ff4500, #ff8c00); border-radius:12px; transition:width 0.2s ease-in-out; }
+    #health-text { position:absolute; inset:0; color:#fff; text-shadow:1px 1px 2px #000; font-weight:bold; line-height:30px; text-align:center; }
   </style>
 </head>
 <body>
@@ -34,6 +37,10 @@
     </div>
   </div>
   <div id="crosshair"></div>
+  <div id="health-bar-container">
+      <div id="health-bar"></div>
+      <div id="health-text">100 HP</div>
+  </div>
 
   <script type="importmap">
     {
@@ -49,71 +56,103 @@
     import * as THREE from 'three';
     import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 
-    // === Supabase (remplace si besoin) ===
+    // === Supabase ===
     const SUPABASE_URL = 'https://ywxeflymtbyorqcirqiq.supabase.co';
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl3eGVmbHltdGJ5b3JxY2lycWlxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg2NzkzNDIsImV4cCI6MjA3NDI1NTM0Mn0.mCucqm8nJ_c-ZaPR6ZpxZhF9qaufrphk4lLNpho728Y';
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    let channel = null;                    // room realtime
-    const myId = crypto.randomUUID();      // id client
-    const peers = new Map();               // peerId -> {pos, rot}
-    const peerGhosts = new Map();          // peerId -> THREE.Mesh (ghost visuel)
+    let channel = null;
+    const myId = crypto.randomUUID();
+    const peers = new Map();
+    const peerAvatars = new Map();
 
     function randomCode(){ return Math.random().toString(36).slice(2,6).toUpperCase(); }
+    
+    function createRemotePlayerAvatar(data) {
+        const { pos, playerClass } = data;
+        const avatarGroup = new THREE.Group();
+        
+        const skinMaterial = new THREE.MeshStandardMaterial({ color: 0xdeb887 });
+        const darkMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
 
-    // Fabrique un ghost (sphère bleue brillante)
-    function createGhostAt(pos){
-      const ghost = new THREE.Mesh(
-        new THREE.SphereGeometry(0.3, 16, 16),
-        new THREE.MeshStandardMaterial({ color: 0x00aaff, emissive: 0x004466, emissiveIntensity: 0.6 })
-      );
-      ghost.position.set(pos.x, pos.y, pos.z);
-      // petite “tête” pour l’orientation (facultatif)
-      const head = new THREE.Mesh(
-        new THREE.SphereGeometry(0.15, 12, 12),
-        new THREE.MeshStandardMaterial({ color: 0x66ddff, emissive: 0x004466, emissiveIntensity: 0.5 })
-      );
-      head.position.set(0, 0.35, 0);
-      ghost.add(head);
-      scene.add(ghost);
-      return ghost;
+        const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), skinMaterial);
+        const torso = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.2, 0.4), darkMaterial);
+        const leftLeg = new THREE.Mesh(new THREE.BoxGeometry(0.3, 1.0, 0.3), darkMaterial);
+        leftLeg.position.set(-0.25, -1.1, 0);
+        const rightLeg = new THREE.Mesh(new THREE.BoxGeometry(0.3, 1.0, 0.3), darkMaterial);
+        rightLeg.position.set(0.25, -1.1, 0);
+        
+        const body = new THREE.Group();
+        body.add(head, torso, leftLeg, rightLeg);
+        avatarGroup.add(body);
+        
+        if (playerClass === 'warrior') {
+            const armorMaterial = new THREE.MeshStandardMaterial({ color: 0x777777, metalness: 0.8, roughness: 0.4 });
+            const helmet = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), armorMaterial);
+            head.add(helmet);
+            const chestplate = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.0, 0.5), armorMaterial);
+            chestplate.position.y = 0.1; torso.add(chestplate);
+            const pauldron = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+            const leftPauldron = new THREE.Mesh(pauldron, armorMaterial);
+            leftPauldron.position.set(-0.5, 0.4, 0); torso.add(leftPauldron);
+            const rightPauldron = new THREE.Mesh(pauldron, armorMaterial);
+            rightPauldron.position.set(0.5, 0.4, 0); torso.add(rightPauldron);
+            const sword = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.5, 0.2), new THREE.MeshStandardMaterial({ color: 0xc0c0c0 }));
+            sword.name = 'sword'; sword.position.set(0.8, 0.3, 0.1); sword.rotation.z = -Math.PI / 16; torso.add(sword);
+            const shield = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.2, 0.2), new THREE.MeshStandardMaterial({ color: 0x8B4513 }));
+            shield.name = 'shield'; shield.position.set(-0.8, 0.1, 0.1); shield.rotation.z = Math.PI / 16; torso.add(shield);
+        } else if (playerClass === 'mage') {
+            const robeMaterial = new THREE.MeshStandardMaterial({ color: 0x4a0d6a });
+            const hat = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.8, 8), robeMaterial);
+            hat.position.y = 0.5; head.add(hat);
+            const robe = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.8, 1.8, 8), robeMaterial);
+            robe.position.y = -0.3; torso.add(robe);
+        }
+
+        avatarGroup.position.set(pos.x, pos.y - PLAYER_HEIGHT + 1.1, pos.z);
+        scene.add(avatarGroup);
+        objects.push(avatarGroup); // Ajout pour la collision
+        return { mesh: avatarGroup, lastAction: 'idle' };
     }
 
     async function joinRoom(code){
-      // Nettoyage visuel si on change de room
-      peerGhosts.forEach(mesh => scene.remove(mesh));
-      peerGhosts.clear();
+      peerAvatars.forEach(avatar => {
+        scene.remove(avatar.mesh);
+        objects = objects.filter(o => o !== avatar.mesh);
+      });
+      peerAvatars.clear();
       peers.clear();
 
       if (channel) await supabase.removeChannel(channel);
 
       channel = supabase.channel(`room:${code}`, { config: { presence: { key: myId } } });
 
-      // Presence: sync global (peut servir à lister les connectés)
-      channel.on('presence', { event:'sync' }, () => {
-        // const state = channel.presenceState();
-        // console.log('presence sync', state);
+      channel.on('presence', { event: 'leave' }, ({ leftPresences }) => {
+        for (const pres of leftPresences) {
+            const avatar = peerAvatars.get(pres.key);
+            if (avatar) {
+                scene.remove(avatar.mesh);
+                objects = objects.filter(o => o !== avatar.mesh);
+                peerAvatars.delete(pres.key);
+            }
+            peers.delete(pres.key);
+        }
+      });
+      
+      channel.on('broadcast', { event: 'hit' }, ({ payload }) => {
+          if (payload.targetId === myId) {
+              takeDamage(payload.damage);
+          }
       });
 
-      // Un joueur part -> on supprime son ghost
-      channel.on('presence', { event: 'leave' }, ({ key }) => {
-        const ghost = peerGhosts.get(key);
-        if (ghost) { scene.remove(ghost); peerGhosts.delete(key); }
-        peers.delete(key);
-      });
-
-      // Réception des états (pos/rot) des autres
       channel.on('broadcast', { event:'state' }, ({ payload }) => {
-        const { id, pos, rot } = payload;
+        const { id, pos, rot, playerClass, action } = payload;
         if (id === myId) return;
 
-        // stocke dernière position/rotation
-        peers.set(id, { pos, rot });
-
-        // crée le ghost si besoin
-        if (!peerGhosts.has(id)) {
-          const ghost = createGhostAt(pos);
-          peerGhosts.set(id, ghost);
+        peers.set(id, { pos, rot, playerClass, action });
+        if (!peerAvatars.has(id)) {
+          const avatarData = createRemotePlayerAvatar({ pos, playerClass });
+          peerAvatars.set(id, avatarData);
         }
       });
 
@@ -122,7 +161,6 @@
       });
     }
 
-    // Quitte la room proprement si on change de page / ferme l’onglet
     window.addEventListener('pagehide', async () => {
       try { if (channel) await supabase.removeChannel(channel); } catch {}
     });
@@ -134,27 +172,26 @@
     let moveForward=false, moveBackward=false, moveLeft=false, moveRight=false, canJump=false;
     let objects = [];
     let playerClass = null;
+    let playerHealth = 100;
 
-    // Warrior
+    // ... (variables de classe)
     let isAttacking=false, lastAttackTime=0, isBlocking=false, isDashing=false, lastDashTime=0;
     const attackCooldown=100, dashCooldown=1500;
-
-    // Mage
     let activeFireballs=[], lastFireballTime=0, heldFireball=null, iceWall=null;
     const fireballCooldown=1000, iceWallCooldown=10000, iceWallDuration=5000, blinkCooldown=3000;
     let lastIceWallTime=0, lastBlinkTime=0;
-
-    // Modèle joueur
+    
     let swordGroup, rightArm, leftArm, shield, floor;
     let initialSwordRotation, initialLeftArmPosition, initialLeftArmRotation;
 
-    // Constantes
     const PLAYER_SPEED=60.0, PLAYER_HEIGHT=1.8, GRAVITY=30.0, JUMP_VELOCITY=10.0, DASH_STRENGTH=35.0, BLINK_DISTANCE=8.0;
 
     const clock = new THREE.Clock();
     const crosshair = document.getElementById('crosshair');
+    const healthBarContainer = document.getElementById('health-bar-container');
+    const healthBar = document.getElementById('health-bar');
+    const healthText = document.getElementById('health-text');
 
-    // timestamp pour throttler l’envoi réseau
     let lastSend = 0;
 
     init();
@@ -209,7 +246,6 @@
       setupMenuListeners();
       setupRoomListeners();
 
-      // Ne lock que si on clique sur le fond (pas sur les boutons), et si une classe est choisie
       blocker.addEventListener('click', (event) => { 
         if (event.target === blocker && playerClass) {
           controls.lock(); 
@@ -219,27 +255,26 @@
       controls.addEventListener('lock', () => {
         blocker.style.display = 'none';
         crosshair.style.display = 'block';
+        healthBarContainer.style.display = 'block';
       });
 
       controls.addEventListener('unlock', () => {
         blocker.style.display = 'flex';
         crosshair.style.display = 'none';
-        menuContent.innerHTML = `
-          <h2>Choisissez votre classe</h2>
-          <div class="class-selection">
-            <button id="btnWarrior">Guerrier</button>
-            <button id="btnMage">Mage</button>
-          </div>
-          <div style="margin-top:12px">
-            <input id="roomCode" placeholder="Code de room (ex: ABCD)" maxlength="12" />
-            <button id="btnCreate">Créer</button>
-            <button id="btnJoin">Rejoindre</button>
-          </div>
-          <p style="margin-top:20px;">Appuyez sur Échap pour changer de classe.</p>
-        `;
-        // rebrancher les listeners après avoir recréé le HTML
-        setupMenuListeners();
-        setupRoomListeners();
+        healthBarContainer.style.display = 'none';
+        
+        // On ne réaffiche le menu que si le joueur est mort
+        if (playerHealth <= 0) {
+            menuContent.innerHTML = `
+              <h2>Vous êtes mort.</h2>
+              <p>Choisissez une classe pour réapparaître.</p>
+              <div class="class-selection">
+                <button id="btnWarrior">Guerrier</button>
+                <button id="btnMage">Mage</button>
+              </div>
+            `;
+            setupMenuListeners();
+        }
       });
 
       document.addEventListener('pointerlockerror', () => console.error('Pointer Lock Error'), false);
@@ -258,6 +293,8 @@
     function selectClass(event, chosenClass){
       event.stopPropagation();
       playerClass = chosenClass;
+      playerHealth = 100;
+      updateHealthUI();
       cleanupPlayerModel();
       createPlayerModel(playerClass);
 
@@ -268,6 +305,7 @@
       `;
     }
 
+    // ... (cleanupPlayerModel, createPlayerModel, createWorld)
     function cleanupPlayerModel(){
       if (rightArm){
         if (swordGroup) rightArm.remove(swordGroup);
@@ -303,13 +341,10 @@
 
       if (className === 'warrior'){
         leftArm.visible = true;
-        const blade = new THREE.Mesh(new THREE.BoxGeometry(0.05,1.5,0.2),
-          new THREE.MeshStandardMaterial({ color:0xc0c0c0, metalness:0.8, roughness:0.4 }));
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(0.05,1.5,0.2), new THREE.MeshStandardMaterial({ color:0xc0c0c0, metalness:0.8, roughness:0.4 }));
         blade.position.y = 0.75;
-        const hilt = new THREE.Mesh(new THREE.BoxGeometry(0.15,0.4,0.15),
-          new THREE.MeshStandardMaterial({ color:0x4a2c0f, roughness:0.8 }));
-        const guard = new THREE.Mesh(new THREE.BoxGeometry(0.1,0.1,0.5),
-          new THREE.MeshStandardMaterial({ color:0xdaa520, metalness:0.6, roughness:0.5 }));
+        const hilt = new THREE.Mesh(new THREE.BoxGeometry(0.15,0.4,0.15), new THREE.MeshStandardMaterial({ color:0x4a2c0f, roughness:0.8 }));
+        const guard = new THREE.Mesh(new THREE.BoxGeometry(0.1,0.1,0.5), new THREE.MeshStandardMaterial({ color:0xdaa520, metalness:0.6, roughness:0.5 }));
         guard.position.y = 0.25;
         swordGroup = new THREE.Group(); swordGroup.add(blade,hilt,guard);
         swordGroup.position.set(0,0.6,0); swordGroup.rotation.x = Math.PI/2.2;
@@ -368,6 +403,26 @@
       scene.add(target); objects.push(target);
     }
 
+    function updateHealthUI() {
+        const hp = Math.max(0, playerHealth);
+        healthBar.style.width = `${hp}%`;
+        healthText.textContent = `${hp} HP`;
+    }
+
+    function takeDamage(amount) {
+        if (playerHealth <= 0) return;
+        playerHealth -= amount;
+        updateHealthUI();
+        if (playerHealth <= 0) {
+            onDeath();
+        }
+    }
+
+    function onDeath() {
+        controls.unlock();
+    }
+
+    // ... (event listeners et fonctions de jeu)
     function onWindowResize(){ camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
 
     function onKeyDown(e){
@@ -535,12 +590,19 @@
     function checkHit(){
       const swordTip = new THREE.Vector3(0.6,-0.2,-2.5);
       const worldPos = swordTip.applyMatrix4(camera.matrixWorld);
-      const targets = scene.children.filter(o=>o.name==='target');
-      targets.forEach(target=>{
-        const d = worldPos.distanceTo(target.position);
-        if (d < 1.5){
+      
+      // Hit contre la cible d'entraînement
+      const target = scene.getObjectByName('target');
+      if (target && worldPos.distanceTo(target.position) < 1.5){
           target.material.color.set(0x00ff00);
           setTimeout(()=>target.material.color.set(0xff0000), 300);
+      }
+      
+      // Hit contre les autres joueurs
+      peerAvatars.forEach((avatar, id) => {
+        const distance = worldPos.distanceTo(avatar.mesh.position);
+        if (distance < 2.0) { // Rayon de l'attaque
+            channel.send({ type: 'broadcast', event: 'hit', payload: { targetId: id, damage: 10 } });
         }
       });
     }
@@ -552,10 +614,8 @@
         fb.lifetime -= delta;
         let remove = false;
 
-        if (iceWall){
-          const wallBB = new THREE.Box3().setFromObject(iceWall);
-          const fbBB = new THREE.Box3().setFromObject(fb);
-          if (wallBB.intersectsBox(fbBB)) remove = true;
+        if (iceWall && (new THREE.Box3().setFromObject(iceWall)).intersectsBox(new THREE.Box3().setFromObject(fb))) {
+            remove = true;
         }
 
         const target = scene.getObjectByName('target');
@@ -564,6 +624,14 @@
           setTimeout(()=>target.material.color.set(0xff0000), 300);
           remove = true;
         }
+        
+        peerAvatars.forEach((avatar, id) => {
+            const avatarBB = new THREE.Box3().setFromObject(avatar.mesh);
+            if (avatarBB.containsPoint(fb.position)) {
+                channel.send({ type: 'broadcast', event: 'hit', payload: { targetId: id, damage: 10 } });
+                remove = true;
+            }
+        });
 
         if (fb.lifetime <= 0) remove = true;
         if (remove){ scene.remove(fb); activeFireballs.splice(i,1); }
@@ -595,22 +663,33 @@
 
       const playerCollider = new THREE.Box3();
       const playerSize = new THREE.Vector3(0.8, PLAYER_HEIGHT, 0.8);
+      const originalPosition = controls.getObject().position.clone();
 
       controls.moveRight(-playerVelocity.x * delta);
-      playerCollider.setFromCenterAndSize(controls.getObject().position, playerSize);
-      for (const object of objects){
-        if (object === floor) continue;
-        const bb = new THREE.Box3().setFromObject(object);
-        if (playerCollider.intersectsBox(bb)){ controls.moveRight(playerVelocity.x * delta); playerVelocity.x=0; break; }
-      }
-
       controls.moveForward(-playerVelocity.z * delta);
+      
       playerCollider.setFromCenterAndSize(controls.getObject().position, playerSize);
       for (const object of objects){
-        if (object === floor) continue;
+        if (object === floor || object.isGroup) continue; // On ignore le sol et les groupes (avatars) pour cette boucle
         const bb = new THREE.Box3().setFromObject(object);
-        if (playerCollider.intersectsBox(bb)){ controls.moveForward(playerVelocity.z * delta); playerVelocity.z=0; break; }
+        if (playerCollider.intersectsBox(bb)){
+            controls.getObject().position.copy(originalPosition); // Reset si collision mur/objet
+            playerVelocity.x = 0;
+            playerVelocity.z = 0;
+            break;
+        }
       }
+      
+      // Collision entre joueurs
+      peerAvatars.forEach(avatar => {
+        const remoteCollider = new THREE.Box3().setFromObject(avatar.mesh);
+        if(playerCollider.intersectsBox(remoteCollider)) {
+            controls.getObject().position.copy(originalPosition);
+             playerVelocity.x = 0;
+            playerVelocity.z = 0;
+        }
+      });
+
 
       playerVelocity.y -= GRAVITY * delta;
       controls.getObject().position.y += playerVelocity.y * delta;
@@ -625,30 +704,52 @@
       requestAnimationFrame(animate);
       const delta = clock.getDelta();
 
-      if (playerClass) updatePlayer(delta);
+      if (playerClass && controls.isLocked) updatePlayer(delta);
       updateProjectiles(delta);
 
-      // Interpolation des ghosts vers leur dernière position connue
-      peerGhosts.forEach((mesh, id) => {
-        const data = peers.get(id);
-        if (!data) return;
-        const { pos } = data;
-        mesh.position.lerp(new THREE.Vector3(pos.x, pos.y, pos.z), 0.2);
+      peerAvatars.forEach((avatar, id) => {
+          const data = peers.get(id);
+          if (!data) return;
+          const { pos, rot, action } = data;
+          
+          avatar.mesh.position.lerp(new THREE.Vector3(pos.x, pos.y - PLAYER_HEIGHT + 1.1, pos.z), 0.2);
+          
+          const euler = new THREE.Euler(rot.x, rot.y, rot.z, 'YXZ');
+          const quaternion = new THREE.Quaternion().setFromEuler(euler);
+          avatar.mesh.quaternion.slerp(quaternion, 0.2);
+
+          if (action !== avatar.lastAction) {
+              avatar.lastAction = action;
+              if (data.playerClass === 'warrior') {
+                  const shield = avatar.mesh.getObjectByName('shield');
+                  if (shield) {
+                      shield.position.z = action === 'block' ? 0.8 : 0.3;
+                  }
+              }
+          }
       });
 
-      // Envoi d’état aux autres (≈10/s)
+
       const now = performance.now();
-      if (channel && now - lastSend > 100){
+      if (channel && now - lastSend > 66 && controls.isLocked){
         lastSend = now;
         const p = controls.getObject().position;
-        const r = camera.rotation; // (tu peux passer en quaternion si tu veux)
+        const r = camera.rotation;
+
+        let currentAction = 'idle';
+        if (isAttacking) currentAction = 'attack';
+        else if (isBlocking) currentAction = 'block';
+
         channel.send({
           type: 'broadcast',
           event: 'state',
           payload: {
             id: myId,
             pos: { x: p.x, y: p.y, z: p.z },
-            rot: { x: r.x, y: r.y, z: r.z }
+            rot: { x: r.x, y: r.y, z: r.z },
+            playerClass: playerClass,
+            action: currentAction,
+            hp: playerHealth
           }
         });
       }
@@ -658,3 +759,4 @@
   </script>
 </body>
 </html>
+
