@@ -36,13 +36,14 @@
     {
       "imports": {
         "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+        "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2"
       }
     }
   </script>
 
   <script type="module">
-    import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+    import { createClient } from '@supabase/supabase-js';
     import * as THREE from 'three';
     import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 
@@ -56,6 +57,11 @@
     const peers = new Map();
     const peerAvatars = new Map();
     const replicatedObjects = new Map();
+
+    function v3ToJSON(v){ return { x: v.x, y: v.y, z: v.z }; }
+    function qToJSON(q){ return { x: q.x, y: q.y, z: q.z, w: q.w }; }
+    function v3FromJSON(o){ return new THREE.Vector3(o.x, o.y, o.z); }
+    function qFromJSON(o){ return new THREE.Quaternion(o.x, o.y, o.z, o.w); }
 
     function randomCode(){ return Math.random().toString(36).slice(2,6).toUpperCase(); }
     
@@ -103,7 +109,7 @@
         avatarGroup.position.set(pos.x, pos.y - PLAYER_HEIGHT + 1.1, pos.z);
         scene.add(avatarGroup);
         objects.push(avatarGroup);
-        return { mesh: avatarGroup, lastAction: 'idle' };
+        return { mesh: avatarGroup, lastAction: 'idle', playerClass: data.playerClass };
     }
 
     async function joinRoom(code){
@@ -161,9 +167,16 @@
         if (id === myId) return;
 
         peers.set(id, { pos, rot, playerClass, action });
-        if (!peerAvatars.has(id)) {
-          const avatarData = createRemotePlayerAvatar({ pos, playerClass });
-          peerAvatars.set(id, avatarData);
+        
+        const existingAvatar = peerAvatars.get(id);
+        if (existingAvatar && existingAvatar.playerClass !== playerClass) {
+            scene.remove(existingAvatar.mesh);
+            objects = objects.filter(o => o !== existingAvatar.mesh);
+            const newAvatar = createRemotePlayerAvatar({ pos, playerClass });
+            peerAvatars.set(id, newAvatar);
+        } else if (!existingAvatar) {
+          const newAvatar = createRemotePlayerAvatar({ pos, playerClass });
+          peerAvatars.set(id, newAvatar);
         }
       });
 
@@ -230,7 +243,7 @@
       controls = new PointerLockControls(camera, document.body);
       const blocker = document.getElementById('blocker');
       
-      buildMainMenu(); // Construit le menu initial
+      buildMainMenu(); 
 
       blocker.addEventListener('click', (event) => { 
         if (event.target === blocker && playerClass) {
@@ -248,7 +261,7 @@
         blocker.style.display = 'flex';
         crosshair.style.display = 'none';
         healthBarContainer.style.display = 'none';
-        buildMainMenu(playerHealth <= 0); // Reconstruit le menu en cas de pause ou de mort
+        buildMainMenu(playerHealth <= 0);
       });
 
       document.addEventListener('pointerlockerror', () => console.error('Pointer Lock Error'), false);
@@ -298,14 +311,16 @@
         e.stopPropagation();
         const code = (roomInput.value || randomCode()).toUpperCase();
         await joinRoom(code);
-        alert(`Room créée: ${code}`);
+        if(!playerClass) alert('Veuillez choisir une classe avant de commencer.');
+        else alert(`Room créée: ${code}`);
       });
       document.getElementById('btnJoin').addEventListener('click', async (e)=>{
         e.stopPropagation();
         const code = (roomInput.value || '').toUpperCase();
         if (!code) return alert('Entre un code de room.');
         await joinRoom(code);
-        alert(`Rejoint room: ${code}`);
+        if(!playerClass) alert('Veuillez choisir une classe avant de commencer.');
+        else alert(`Rejoint room: ${code}`);
       });
     }
 
@@ -317,7 +332,6 @@
       cleanupPlayerModel();
       createPlayerModel(playerClass);
       
-      // Respawn au point de départ
       controls.getObject().position.set(0, PLAYER_HEIGHT, 5);
       playerVelocity.set(0,0,0);
 
@@ -344,7 +358,7 @@
           if (obj.ownerId === myId) {
              const payload = { eventType: 'destroy', objectId: id, ownerId: myId };
              handleGameEvent(payload);
-             channel.send({ type: 'broadcast', event: 'game_event', payload });
+             if(channel) channel.send({ type: 'broadcast', event: 'game_event', payload });
           }
       });
     }
@@ -497,7 +511,7 @@
 
     function performBlink(){
       const direction = new THREE.Vector3();
-      const forward = Number(moveBackward) - Number(moveForward);
+      const forward = Number(moveBackward) - Number(moveForward); // <- signe inversé
       const right = Number(moveRight) - Number(moveLeft);
       direction.z = forward; direction.x = right;
       if (direction.lengthSq() === 0) camera.getWorldDirection(direction);
@@ -508,55 +522,107 @@
     }
     
     function handleGameEvent(payload) {
-        const { eventType, objectId, objectType, data, ownerId } = payload;
-        switch(eventType) {
-            case 'spawn':
-                if (replicatedObjects.has(objectId)) return;
-                
-                let newObject;
-                if (objectType === 'iceWall') {
-                    const wallGeometry = new THREE.BoxGeometry(8,5,0.5);
-                    const wallMaterial = new THREE.MeshStandardMaterial({ color:0xadd8e6, opacity:0.8, transparent:true, metalness:0.2, roughness:0.1 });
-                    newObject = new THREE.Mesh(wallGeometry, wallMaterial);
-                    newObject.name = 'iceWall';
-                    newObject.position.copy(data.position);
-                    newObject.quaternion.copy(data.quaternion);
-                    
-                    newObject.scale.set(1,0.01,1);
-                    const duration=200, start=performance.now();
-                    (function grow(){
-                      if (!replicatedObjects.has(objectId)) return;
-                      const t = Math.min((performance.now()-start)/duration,1);
-                      newObject.scale.y = t;
-                      if (t<1) requestAnimationFrame(grow);
-                    })();
-                } else if (objectType === 'fireball') {
-                    const fireballGeometry = new THREE.SphereGeometry(0.2,16,16);
-                    const fireballMaterial = new THREE.MeshStandardMaterial({ color:0xff4500, emissive:0xff6600, emissiveIntensity:1.5 });
-                    newObject = new THREE.Mesh(fireballGeometry, fireballMaterial);
-                    newObject.position.copy(data.position);
-                    newObject.velocity = new THREE.Vector3().copy(data.velocity);
-                }
+      const { eventType, objectId, objectType, data, ownerId } = payload;
 
-                if (newObject) {
-                    newObject.ownerId = ownerId;
-                    newObject.getSpawnPayload = () => ({ eventType: 'spawn', objectId, objectType, ownerId, data });
-                    scene.add(newObject);
-                    objects.push(newObject);
-                    replicatedObjects.set(objectId, newObject);
-                    setTimeout(() => {
-                        if (ownerId === myId) {
-                           const destroyPayload = { eventType: 'destroy', objectId: objectId, ownerId: myId };
-                           handleGameEvent(destroyPayload);
-                           channel.send({ type: 'broadcast', event: 'game_event', payload: destroyPayload });
-                        }
-                    }, data.lifetime);
-                }
-                break;
-            case 'destroy':
-                destroyReplicatedObject(objectId);
-                break;
+      switch (eventType) {
+        case 'spawn': {
+          if (replicatedObjects.has(objectId)) return;
+
+          let newObject;
+
+          if (objectType === 'iceWall') {
+            const wallGeometry = new THREE.BoxGeometry(8, 5, 0.5);
+            const wallMaterial = new THREE.MeshStandardMaterial({
+              color: 0xadd8e6,
+              opacity: 0.0,            // start invisible
+              transparent: true,
+              metalness: 0.2,
+              roughness: 0.1
+            });
+            newObject = new THREE.Mesh(wallGeometry, wallMaterial);
+            newObject.name = 'iceWall';
+
+            // Reconstruct
+            newObject.position.copy(v3FromJSON(data.position));
+            newObject.quaternion.copy(qFromJSON(data.quaternion));
+
+            // Apparition (scale Y + fade in)
+            newObject.scale.set(1, 0.01, 1);
+            animateWallIn(newObject, /*targetOpacity*/0.8, /*durationMs*/300);
+
+          } else if (objectType === 'fireball') {
+            const fireballGeometry = new THREE.SphereGeometry(0.2, 16, 16);
+            const fireballMaterial = new THREE.MeshStandardMaterial({
+              color: 0xff4500,
+              emissive: 0xff6600,
+              emissiveIntensity: 1.5
+            });
+            newObject = new THREE.Mesh(fireballGeometry, fireballMaterial);
+            newObject.position.copy(v3FromJSON(data.position));
+            newObject.velocity = v3FromJSON(data.velocity);
+          }
+
+          if (newObject) {
+            newObject.ownerId = ownerId;
+            newObject.getSpawnPayload = () => ({
+              eventType: 'spawn',
+              objectId, objectType, ownerId, data
+            });
+
+            scene.add(newObject);
+            objects.push(newObject);
+            replicatedObjects.set(objectId, newObject);
+
+            // Destruction programmée par l'owner → diffuse à tous
+            if (data.lifetime && ownerId === myId) {
+              setTimeout(() => {
+                const destroyPayload = { eventType: 'destroy', objectId, ownerId: myId };
+                handleGameEvent(destroyPayload);
+                if (channel) channel.send({ type:'broadcast', event:'game_event', payload: destroyPayload });
+              }, data.lifetime);
+            }
+          }
+          break;
         }
+
+        case 'destroy': {
+          destroyReplicatedObject(objectId);
+          break;
+        }
+      }
+    }
+
+    // Anim d'apparition
+    function animateWallIn(mesh, targetOpacity, duration){
+      const start = performance.now();
+      const startOpacity = mesh.material.opacity;
+      const startScaleY = mesh.scale.y;
+      const endScaleY = 1;
+
+      function tick(){
+        const t = Math.min((performance.now() - start) / duration, 1);
+        mesh.material.opacity = startOpacity + (targetOpacity - startOpacity) * t;
+        mesh.scale.y = startScaleY + (endScaleY - startScaleY) * t;
+        if (t < 1) requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    }
+
+    // Anim de disparition + cleanup (utilisée au destroy)
+    function animateWallOutAndRemove(mesh, duration, after){
+      const start = performance.now();
+      const startOpacity = mesh.material.opacity;
+      const startScaleY = mesh.scale.y;
+
+      function tick(){
+        const t = Math.min((performance.now() - start) / duration, 1);
+        const k = 1 - t;
+        mesh.material.opacity = startOpacity * k;
+        mesh.scale.y = Math.max(0.01, startScaleY * k);
+        if (t < 1) requestAnimationFrame(tick);
+        else after && after();
+      }
+      requestAnimationFrame(tick);
     }
 
     function destroyReplicatedObject(objectId) {
@@ -577,27 +643,38 @@
     }
 
     function castIceWall(){
-        const wallId = `icewall-${myId}-${Date.now()}`;
-        const dir = new THREE.Vector3(); camera.getWorldDirection(dir); dir.y=0; dir.normalize();
-        const wallPos = controls.getObject().position.clone().add(dir.multiplyScalar(4)); wallPos.y = 2.5;
-        
-        const tempWall = new THREE.Object3D();
-        tempWall.position.copy(wallPos);
-        tempWall.lookAt(controls.getObject().position.x, 2.5, controls.getObject().position.z);
+      const wallId = `icewall-${myId}-${Date.now()}`;
 
-        const payload = {
-            eventType: 'spawn',
-            objectId: wallId,
-            objectType: 'iceWall',
-            ownerId: myId,
-            data: {
-              position: tempWall.position,
-              quaternion: tempWall.quaternion,
-              lifetime: 5000
-            }
-        };
-        handleGameEvent(payload);
-        channel.send({ type: 'broadcast', event: 'game_event', payload });
+      // Direction (face caméra, horizontale)
+      const dir = new THREE.Vector3();
+      camera.getWorldDirection(dir); dir.y = 0; dir.normalize();
+
+      // Position du mur à ~4m devant, centré à mi-hauteur
+      const wallPos = controls.getObject().position.clone().add(dir.clone().multiplyScalar(4));
+      const wallY = 2.5; // centre vertical (mur de 5 de haut)
+      wallPos.y = wallY;
+
+      // Orientation: le mur regarde le joueur (perpendiculaire au regard)
+      const tmp = new THREE.Object3D();
+      tmp.position.copy(wallPos);
+      tmp.lookAt(controls.getObject().position.x, wallY, controls.getObject().position.z);
+
+      const lifetime = 5000;
+
+      const payload = {
+        eventType: 'spawn',
+        objectId: wallId,
+        objectType: 'iceWall',
+        ownerId: myId,
+        data: {
+          position: v3ToJSON(tmp.position),
+          quaternion: qToJSON(tmp.quaternion),
+          lifetime
+        }
+      };
+
+      handleGameEvent(payload); // local
+      if (channel) channel.send({ type:'broadcast', event:'game_event', payload });
     }
 
     function castFireball(){
@@ -623,7 +700,7 @@
       };
 
       handleGameEvent(payload);
-      channel.send({ type: 'broadcast', event: 'game_event', payload });
+      if (channel) channel.send({ type: 'broadcast', event: 'game_event', payload });
 
       heldFireball.visible = false;
       setTimeout(()=>{ if (heldFireball) heldFireball.visible = true; }, 200);
@@ -758,7 +835,8 @@
       if (!controls.isLocked) return;
 
       const moveDirection = new THREE.Vector3(
-        Number(moveRight) - Number(moveLeft), 0, Number(moveBackward) - Number(moveForward)
+          Number(moveRight) - Number(moveLeft), 0,
+          Number(moveBackward) - Number(moveForward) // <- signe inversé
       );
 
       const deceleration = (PLAYER_SPEED / DECELERATION_TIME) * delta;
@@ -780,9 +858,9 @@
       
       if (isDashing){
         const dashImpulse = new THREE.Vector3(
-             (Number(moveRight) - Number(moveLeft)), 0, (Number(moveBackward) - Number(moveForward))
+             (Number(moveRight) - Number(moveLeft)), 0, (Number(moveForward) - Number(moveBackward))
         );
-        if(dashImpulse.lengthSq() === 0) dashImpulse.z = 1;
+        if(dashImpulse.lengthSq() === 0) dashImpulse.z = -1;
         dashImpulse.applyQuaternion(camera.quaternion).normalize();
         controls.getObject().position.add(dashImpulse.multiplyScalar(DASH_STRENGTH * delta));
         isDashing = false;
@@ -803,6 +881,11 @@
           if (object === floor || object.isGroup) continue;
           if (playerCollider.intersectsBox(new THREE.Box3().setFromObject(object))) { collidedX = true; break; }
       }
+       peerAvatars.forEach(avatar => {
+        if (playerCollider.intersectsBox(new THREE.Box3().setFromObject(avatar.mesh))) {
+            collidedX = true;
+        }
+      });
       if (collidedX) newPosition.x = originalPosition.x;
 
       // Collision Z
@@ -813,6 +896,11 @@
           if (object === floor || object.isGroup) continue;
           if (playerCollider.intersectsBox(new THREE.Box3().setFromObject(object))) { collidedZ = true; break; }
       }
+       peerAvatars.forEach(avatar => {
+        if (playerCollider.intersectsBox(new THREE.Box3().setFromObject(avatar.mesh))) {
+            collidedZ = true;
+        }
+      });
       if (collidedZ) newPosition.z = originalPosition.z;
 
       controls.getObject().position.copy(newPosition);
