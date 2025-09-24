@@ -330,7 +330,8 @@
     let lastSend = 0;
 
     init();
-    
+    animate();
+
     function init(){
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x87ceeb);
@@ -390,8 +391,6 @@
       document.addEventListener('mouseup', onMouseUp);
       window.addEventListener('resize', onWindowResize);
       document.addEventListener('contextmenu', (e)=>e.preventDefault());
-      
-      animate(); // Start the animation loop
     }
 
     function buildMainMenu(isDeath = false) {
@@ -1017,7 +1016,7 @@
 
       const moveDirection = new THREE.Vector3(
         Number(moveRight) - Number(moveLeft), 0,
-        Number(moveForward) - Number(moveBackward)
+        Number(moveBackward) - Number(moveForward)
       );
 
       const deceleration = (PLAYER_SPEED / DECELERATION_TIME) * delta;
@@ -1039,7 +1038,8 @@
 
       if (isDashing){
         const dashImpulse = new THREE.Vector3(
-          (Number(moveRight) - Number(moveLeft)), 0, (Number(moveForward) - Number(moveBackward))
+          (Number(moveRight) - Number(moveLeft)), 0,
+          (Number(moveBackward) - Number(moveForward))
         );
         if(dashImpulse.lengthSq() === 0) dashImpulse.z = -1;
         dashImpulse.applyQuaternion(camera.quaternion).normalize();
@@ -1117,7 +1117,7 @@
       const now = performance.now();
       if (channel && now - lastSend > 66 && playerClass){
         lastSend = now;
-        const p = controlss.getObject().position;
+        const p = controls.getObject().position;
         const r = camera.rotation;
 
         let currentAction = 'idle';
