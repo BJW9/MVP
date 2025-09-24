@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>First-Person Warrior MVP</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            background-color: #000;
+        }
+        #blocker {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #instructions {
+            width: 80%;
+            max-width: 600px;
+            text-align: center;
+            color: #fff;
+            background-color: rgba(20, 20, 20, 0.9);
+            padding: 20px;
+            border-radius: 15px;
+            border: 1px solid #444;
+        }
+        #instructions h2 {
+            margin-top: 0;
+            font-size: 2rem;
+            color: #ffa500;
+        }
+        #instructions p {
+            font-size: 1.1rem;
+            line-height: 1.5;
+        }
+        .controls {
+            margin: 15px 0;
+            display: inline-block;
+            background-color: #333;
+            padding: 10px;
+            border-radius: 8px;
+        }
+        .controls kbd {
+            background-color: #555;
+            padding: 5px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+            margin: 0 5px;
+        }
+        /* New styles for multiplayer UI */
+        #room-ui input {
+            padding: 10px;
+            border-radius: 5px;
+            border: 1px solid #555;
+            background-color: #333;
+            color: #fff;
+            font-size: 1rem;
+            margin-right: 10px;
+            width: 250px;
+        }
+        #room-ui button {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 5px;
+            background-color: #ffa500;
+            color: #000;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            margin: 5px;
+        }
+        #room-ui button:hover {
+            background-color: #ffc966;
+        }
+        #game-info {
+            display: none; /* Hidden until in a room */
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        body.in-room #room-ui {
+            display: none;
+        }
+         body.in-room #game-info {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div id="blocker">
+        <div id="instructions">
+            <h2>Warrior Prototype</h2>
+            <div id="room-ui">
+                <input id="room" placeholder="Code de partie (ex: SUN-FOX-7)" />
+                <button id="join">Rejoindre</button>
+                <p>ou</p>
+                <button id="create">Créer une nouvelle partie</button>
+            </div>
+            <div id="game-info">
+                <p>Partagez ce lien pour inviter des amis :</p>
+                <button id="copy">Copier le lien</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+        // --- Multiplayer Variables ---
+        let ws;
+        let myPlayerId;
+        const remotePlayers = new Map();
+        const WEBSOCKET_URL = 'https://68d334cec4dc594ccca11205--sensational-klepon-848886.netlify.app/'; // <-- CORRECTED WebSocket Server URL
+
+        // --- Game Variables ---
+        let scene, camera, renderer, controls;
+        let playerVelocity = new THREE.Vector3();
+        let playerDirection = new THREE.Vector3();
+        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false, canJump = false;
+        let objects = [];
+        let isAttacking = false;
+        const attackCooldown = 100;
+        let lastAttackTime = 0;
+        let swordGroup, arm, floor;
+        let initialSwordRotation;
+        const PLAYER_SPEED = 60.0;
+        const PLAYER_HEIGHT = 1.8;
+        const GRAVITY = 30.0;
+        const JUMP_VELOCITY = 10.0;
+        const clock = new THREE.Clock();
+
+        // --- UI Handling ---
+        const inp = document.getElementById('room');
+        const btnCreate = document.getElementById('create');
+        const btnJoin = document.getElementById('join');
+        const btnCopy = document.getElementById('copy');
+
+        function getRoomFromURL() {
+            const u = new URL(location.href);
+            return u.searchParams.get('room');
+        }
+
+        function genRoomCode() {
+            const words = ["SUN","MOON","FOX","OWL","PINE","LAKE","NOVA","RAY","BOLD","MINT"];
+            return `${words[Math.floor(Math.random()*words.length)]}-${words[Math.floor(Math.random()*words.length)]}-${Math.floor(Math.random()*9)+1}`;
+        }
+
+        function goToRoom(code) {
+            const url = new URL(location.href);
+            url.searchParams.set('room', code);
+            location.href = url.toString();
+        }
+
+        btnCreate.onclick = () => {
+            const code = genRoomCode();
+            goToRoom(code);
+        };
+        btnJoin.onclick = () => {
+            const code = (inp.value || '').trim().toUpperCase();
+            if (code) goToRoom(code);
+        };
+        btnCopy.onclick = async () => {
+            await navigator.clipboard.writeText(location.href);
+            btnCopy.textContent = "Lien copié !";
+            setTimeout(() => { btnCopy.textContent = "Copier le lien"; }, 2000);
+        };
+
+        const room = getRoomFromURL();
+        if (room) {
+            document.body.classList.add('in-room');
+            connectAndStartGame(room);
+        }
+
+        // --- Networking ---
+        async function connectAndStartGame(roomCode) {
+            try {
+                await connect(roomCode);
+                init(); // Initialize the 3D world
+                animate(); // Start the game loop
+            } catch (error) {
+                console.error("Failed to connect to WebSocket server:", error);
+                alert("Impossible de se connecter au serveur. Vérifiez le code de la salle et votre connexion.");
+                // Redirect to base URL without room code
+                window.location.href = window.location.origin;
+            }
+        }
+        
+        function connect(room) {
+          return new Promise((resolve, reject) => {
+            console.log(`Connecting to room ${room} at ${WEBSOCKET_URL}`);
+            ws = new WebSocket(WEBSOCKET_URL);
+            
+            ws.onopen = () => {
+                ws.send(JSON.stringify({ type:'join', room }));
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected.');
+                // Could implement a reconnect logic here
+            };
+            
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+                reject(err);
+            };
+
+            ws.onmessage = (ev) => {
+              const msg = JSON.parse(ev.data);
+              
+              switch(msg.type) {
+                case 'welcome':
+                    myPlayerId = msg.playerId;
+                    console.log(`Joined room! My ID is ${myPlayerId}`);
+                    // Spawn players already in the room
+                    for (const p of msg.players) {
+                        if (p.playerId !== myPlayerId) spawnRemotePlayer(p.playerId, p);
+                    }
+                    resolve(); // Connection successful, we can start the game
+                    break;
+                case 'player_joined':
+                    if (msg.playerId !== myPlayerId) {
+                        console.log(`Player ${msg.playerId} joined.`);
+                        spawnRemotePlayer(msg.playerId);
+                    }
+                    break;
+                case 'player_left':
+                    console.log(`Player ${msg.playerId} left.`);
+                    despawnRemotePlayer(msg.playerId);
+                    break;
+                case 'state':
+                    if (msg.playerId !== myPlayerId) {
+                        updateRemotePlayer(msg.playerId, msg.payload);
+                    }
+                    break;
+              }
+            };
+          });
+        }
+
+        function sendState() {
+          if (!ws || ws.readyState !== 1) return;
+          if (sendState._last && performance.now() - sendState._last < 66) return; // ~15 Hz throttle
+          sendState._last = performance.now();
+          
+          const state = {
+            pos: controls.getObject().position.toArray(),
+            rot: camera.quaternion.toArray(),
+            attacking: isAttacking,
+          };
+          
+          ws.send(JSON.stringify({ type:'state', payload: state }));
+        }
+
+        function createRemotePlayerModel() {
+            const playerModel = new THREE.Group();
+            
+            const head = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 0.8), new THREE.MeshStandardMaterial({color: 0x00bfff}));
+            head.position.y = 1.3;
+            
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1, 1.5, 0.5), new THREE.MeshStandardMaterial({color: 0x4682b4}));
+            body.position.y = 0;
+
+            playerModel.add(head);
+            playerModel.add(body);
+            return playerModel;
+        }
+
+        function spawnRemotePlayer(id, snapshot){
+            if (remotePlayers.has(id)) return;
+
+            const remotePlayer = {
+                model: createRemotePlayerModel(),
+                targetPos: new THREE.Vector3(),
+                targetQuat: new THREE.Quaternion(),
+            };
+            
+            if (snapshot && snapshot.payload && snapshot.payload.pos && snapshot.payload.rot) {
+                remotePlayer.model.position.fromArray(snapshot.payload.pos);
+                remotePlayer.targetPos.fromArray(snapshot.payload.pos);
+                remotePlayer.model.quaternion.fromArray(snapshot.payload.rot);
+                remotePlayer.targetQuat.fromArray(snapshot.payload.rot);
+            }
+            
+            remotePlayers.set(id, remotePlayer);
+            scene.add(remotePlayer.model);
+        }
+
+        function updateRemotePlayer(id, snapshot){
+            const player = remotePlayers.get(id);
+            if (!player) return;
+
+            if (snapshot.pos) player.targetPos.fromArray(snapshot.pos);
+            if (snapshot.rot) player.targetQuat.fromArray(snapshot.rot);
+
+            // TODO: Handle attack animation for remote players
+            // if (snapshot.attacking) { ... }
+        }
+
+        function despawnRemotePlayer(id){
+            const player = remotePlayers.get(id);
+            if (!player) return;
+            scene.remove(player.model);
+            remotePlayers.delete(id);
+        }
+
+        function updateRemotePlayers(delta) {
+            for (const [id, player] of remotePlayers) {
+                player.model.position.lerp(player.targetPos, delta * 10);
+                player.model.quaternion.slerp(player.targetQuat, delta * 10);
+            }
+        }
+        
+        // --- Core Game Logic (mostly unchanged) ---
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87ceeb);
+            scene.fog = new THREE.Fog(0x87ceeb, 0, 100);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.y = PLAYER_HEIGHT;
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            dirLight.position.set(-50, 50, 50);
+            dirLight.castShadow = true;
+            dirLight.shadow.camera.top = 20; dirLight.shadow.camera.bottom = -20;
+            dirLight.shadow.camera.left = -20; dirLight.shadow.camera.right = 20;
+            scene.add(dirLight);
+
+            controls = new PointerLockControls(camera, document.body);
+            const blocker = document.getElementById('blocker');
+            const instructions = document.getElementById('instructions');
+            
+            blocker.addEventListener('click', () => {
+                if (document.body.classList.contains('in-room')) {
+                   controls.lock();
+                }
+            });
+
+            controls.addEventListener('lock', () => { instructions.style.display = 'none'; blocker.style.display = 'none'; });
+            controls.addEventListener('unlock', () => { blocker.style.display = 'block'; instructions.style.display = ''; });
+            document.addEventListener('pointerlockerror', () => { console.error('Pointer Lock Error.'); }, false);
+
+            scene.add(controls.getObject());
+            createWorld();
+            createPlayerModel();
+
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            document.addEventListener('mousedown', onMouseDown);
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function createPlayerModel() {
+            const armGeometry = new THREE.BoxGeometry(0.4, 1.2, 0.4);
+            const armMaterial = new THREE.MeshStandardMaterial({ color: 0xdeb887 });
+            arm = new THREE.Mesh(armGeometry, armMaterial);
+            const bladeGeometry = new THREE.BoxGeometry(0.05, 1.5, 0.2);
+            const bladeMaterial = new THREE.MeshStandardMaterial({ color: 0xc0c0c0, metalness: 0.8, roughness: 0.4 });
+            const blade = new THREE.Mesh(bladeGeometry, bladeMaterial);
+            blade.position.y = 0.75;
+            const hiltGeometry = new THREE.BoxGeometry(0.15, 0.4, 0.15);
+            const hiltMaterial = new THREE.MeshStandardMaterial({ color: 0x4a2c0f, roughness: 0.8 });
+            const hilt = new THREE.Mesh(hiltGeometry, hiltMaterial);
+            const guardGeometry = new THREE.BoxGeometry(0.1, 0.1, 0.5);
+            const guardMaterial = new THREE.MeshStandardMaterial({ color: 0xdaa520, metalness: 0.6, roughness: 0.5 });
+            const guard = new THREE.Mesh(guardGeometry, guardMaterial);
+            guard.position.y = 0.25;
+            swordGroup = new THREE.Group();
+            swordGroup.add(blade, hilt, guard);
+            swordGroup.position.set(0, 0.6, 0);
+            swordGroup.rotation.x = Math.PI / 2.2;
+            arm.add(swordGroup);
+            arm.position.set(0.8, -0.7, -1.2);
+            arm.rotation.set(-Math.PI / 2.5, 0.3, -0.2);
+            initialSwordRotation = swordGroup.rotation.clone();
+            camera.add(arm);
+        }
+
+        function createWorld() {
+            const floorGeometry = new THREE.PlaneGeometry(200, 200);
+            const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22 });
+            floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            scene.add(floor);
+            objects.push(floor);
+            const house = new THREE.Group();
+            const wallMaterial = new THREE.MeshStandardMaterial({ color: 0xac8c6c });
+            const wallThickness = 0.5, wallHeight = 5, houseWidth = 10, houseDepth = 12;
+            const wallBack = new THREE.Mesh(new THREE.BoxGeometry(houseWidth, wallHeight, wallThickness), wallMaterial);
+            wallBack.position.set(0, wallHeight / 2, -houseDepth / 2); wallBack.castShadow = true; house.add(wallBack);
+            const wallLeft = new THREE.Mesh(new THREE.BoxGeometry(houseDepth, wallHeight, wallThickness), wallMaterial);
+            wallLeft.position.set(-houseWidth / 2, wallHeight / 2, 0); wallLeft.rotation.y = Math.PI / 2; wallLeft.castShadow = true; house.add(wallLeft);
+            const wallRight = new THREE.Mesh(new THREE.BoxGeometry(houseDepth, wallHeight, wallThickness), wallMaterial);
+            wallRight.position.set(houseWidth / 2, wallHeight / 2, 0); wallRight.rotation.y = Math.PI / 2; wallRight.castShadow = true; house.add(wallRight);
+            const doorWidth = 3, doorHeight = 4;
+            const frontWallSideWidth = (houseWidth - doorWidth) / 2;
+            const wallFrontLeft = new THREE.Mesh(new THREE.BoxGeometry(frontWallSideWidth, wallHeight, wallThickness), wallMaterial);
+            wallFrontLeft.position.set(- (doorWidth / 2 + frontWallSideWidth / 2), wallHeight/2, houseDepth/2); wallFrontLeft.castShadow = true; house.add(wallFrontLeft);
+            const wallFrontRight = new THREE.Mesh(new THREE.BoxGeometry(frontWallSideWidth, wallHeight, wallThickness), wallMaterial);
+            wallFrontRight.position.set((doorWidth / 2 + frontWallSideWidth / 2), wallHeight/2, houseDepth/2); wallFrontRight.castShadow = true; house.add(wallFrontRight);
+            const wallFrontTop = new THREE.Mesh(new THREE.BoxGeometry(doorWidth, wallHeight - doorHeight, wallThickness), wallMaterial);
+            wallFrontTop.position.set(0, doorHeight + (wallHeight - doorHeight)/2, houseDepth/2); wallFrontTop.castShadow = true; house.add(wallFrontTop);
+            const roofGeometry = new THREE.ConeGeometry(houseWidth * 0.8, 4, 4);
+            const roofMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+            roof.position.set(0, wallHeight + 1.5, 0); roof.rotation.y = Math.PI / 4; roof.castShadow = true; house.add(roof);
+            scene.add(house);
+            objects.push(...house.children);
+            const targetGeometry = new THREE.BoxGeometry(1, 2, 1);
+            const targetMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+            const target = new THREE.Mesh(targetGeometry, targetMaterial);
+            target.position.set(0, 1, -8); target.name = "target"; target.castShadow = true;
+            scene.add(target);
+            objects.push(target);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onKeyDown(event) {
+            switch (event.code) {
+                case 'KeyW': case 'KeyZ': moveForward = true; break;
+                case 'KeyA': case 'KeyQ': moveLeft = true; break;
+                case 'KeyS': moveBackward = true; break;
+                case 'KeyD': moveRight = true; break;
+                case 'Space': if (canJump) playerVelocity.y += JUMP_VELOCITY; canJump = false; break;
+            }
+        }
+
+        function onKeyUp(event) {
+            switch (event.code) {
+                case 'KeyW': case 'KeyZ': moveForward = false; break;
+                case 'KeyA': case 'KeyQ': moveLeft = false; break;
+                case 'KeyS': moveBackward = false; break;
+                case 'KeyD': moveRight = false; break;
+            }
+        }
+        
+        function onMouseDown(event) {
+            if (event.button === 0 && controls.isLocked && !isAttacking) {
+                const now = performance.now();
+                if (now - lastAttackTime > attackCooldown) {
+                    isAttacking = true;
+                    lastAttackTime = now;
+                    swingSword();
+                }
+            }
+        }
+
+        function swingSword() {
+            const targetSwordRotationX = 0;
+            const duration = 50;
+            const startTime = performance.now();
+            function animateSwing() {
+                const elapsed = performance.now() - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                swordGroup.rotation.x = initialSwordRotation.x + (targetSwordRotationX - initialSwordRotation.x) * progress;
+                if (progress < 1) requestAnimationFrame(animateSwing);
+                else { checkHit(); returnSword(); }
+            }
+            animateSwing();
+        }
+
+        function returnSword() {
+            const currentSwordRotationX = swordGroup.rotation.x;
+            const duration = 75;
+            const startTime = performance.now();
+            function animateReturn() {
+                 const elapsed = performance.now() - startTime;
+                 const progress = Math.min(elapsed / duration, 1);
+                 swordGroup.rotation.x = currentSwordRotationX + (initialSwordRotation.x - currentSwordRotationX) * progress;
+                 if (progress < 1) requestAnimationFrame(animateReturn);
+                 else { swordGroup.rotation.copy(initialSwordRotation); isAttacking = false; }
+            }
+            animateReturn();
+        }
+
+        function checkHit() {
+            const swordTip = new THREE.Vector3(0.6, -0.2, -2.5);
+            const swordWorldPosition = swordTip.applyMatrix4(camera.matrixWorld);
+            const targets = scene.children.filter(obj => obj.name === 'target');
+            targets.forEach(target => {
+                const distance = swordWorldPosition.distanceTo(target.position);
+                if (distance < 1.5) {
+                    target.material.color.set(0x00ff00);
+                    setTimeout(() => { target.material.color.set(0xff0000); }, 300);
+                }
+            });
+        }
+
+        function updatePlayer(delta) {
+            if (!controls.isLocked) return;
+            const speedDelta = PLAYER_SPEED * delta;
+            playerVelocity.x -= playerVelocity.x * 5.0 * delta;
+            playerVelocity.z -= playerVelocity.z * 5.0 * delta;
+            playerDirection.z = Number(moveForward) - Number(moveBackward);
+            playerDirection.x = Number(moveRight) - Number(moveLeft);
+            playerDirection.normalize();
+            if (moveForward || moveBackward) playerVelocity.z -= playerDirection.z * speedDelta;
+            if (moveLeft || moveRight) playerVelocity.x -= playerDirection.x * speedDelta;
+            const playerCollider = new THREE.Box3();
+            const playerSize = new THREE.Vector3(0.8, PLAYER_HEIGHT, 0.8);
+            controls.moveRight(-playerVelocity.x * delta);
+            playerCollider.setFromCenterAndSize(controls.getObject().position, playerSize);
+            for (const object of objects) {
+                if (object === floor) continue;
+                if (playerCollider.intersectsBox(new THREE.Box3().setFromObject(object))) {
+                    controls.moveRight(playerVelocity.x * delta);
+                    break;
+                }
+            }
+            controls.moveForward(-playerVelocity.z * delta);
+            playerCollider.setFromCenterAndSize(controls.getObject().position, playerSize);
+            for (const object of objects) {
+                if (object === floor) continue;
+                if (playerCollider.intersectsBox(new THREE.Box3().setFromObject(object))) {
+                    controls.moveForward(playerVelocity.z * delta);
+                    break;
+                }
+            }
+            playerVelocity.y -= GRAVITY * delta;
+            controls.getObject().position.y += playerVelocity.y * delta;
+            if (controls.getObject().position.y < PLAYER_HEIGHT) {
+                playerVelocity.y = 0;
+                controls.getObject().position.y = PLAYER_HEIGHT;
+                canJump = true;
+            }
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            updatePlayer(delta);
+            updateRemotePlayers(delta); // Update remote players each frame
+            sendState(); // Send our state to the server
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
+
