@@ -1,789 +1,660 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>First-Person Warrior MVP</title>
-    <style>
-        body {
-            margin: 0;
-            overflow: hidden;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-            background-color: #000;
-        }
-        #blocker {
-            position: absolute;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0,0,0,0.7);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            cursor: pointer;
-            z-index: 10;
-        }
-        #instructions {
-            width: 80%;
-            max-width: 600px;
-            text-align: center;
-            color: #fff;
-            background-color: rgba(20, 20, 20, 0.9);
-            padding: 20px;
-            border-radius: 15px;
-            border: 1px solid #444;
-            cursor: default;
-        }
-        #instructions h2 {
-            margin-top: 0;
-            font-size: 2rem;
-            color: #ffa500;
-        }
-        #instructions p {
-            font-size: 1.1rem;
-            line-height: 1.5;
-        }
-        .controls {
-            margin: 15px 0;
-            display: inline-block;
-            background-color: #333;
-            padding: 10px;
-            border-radius: 8px;
-        }
-        .controls kbd {
-            background-color: #555;
-            padding: 5px 8px;
-            border-radius: 4px;
-            font-weight: bold;
-            margin: 0 5px;
-        }
-        .class-selection button {
-            background-color: #ffa500;
-            color: #000;
-            border: none;
-            padding: 15px 30px;
-            font-size: 1.2rem;
-            font-weight: bold;
-            border-radius: 10px;
-            cursor: pointer;
-            margin: 10px;
-            transition: background-color 0.2s, transform 0.2s;
-        }
-        .class-selection button:hover {
-            background-color: #ffc864;
-            transform: scale(1.05);
-        }
-        #crosshair {
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            width: 4px;
-            height: 4px;
-            background-color: #fff;
-            border-radius: 50%;
-            transform: translate(-50%, -50%);
-            pointer-events: none;
-            z-index: 9;
-            mix-blend-mode: difference; /* Assure la visibilité sur toutes les couleurs */
-            display: none; /* Caché par défaut */
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>First-Person Warrior MVP</title>
+  <style>
+    body { margin:0; overflow:hidden; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,Cantarell,'Open Sans','Helvetica Neue',sans-serif; background:#000; }
+    #blocker { position:absolute; inset:0; background:rgba(0,0,0,0.7); display:flex; justify-content:center; align-items:center; cursor:pointer; z-index:10; }
+    #instructions { width:80%; max-width:600px; text-align:center; color:#fff; background:rgba(20,20,20,0.9); padding:20px; border-radius:15px; border:1px solid #444; cursor:default; }
+    #instructions h2 { margin:0; font-size:2rem; color:#ffa500; }
+    #instructions p { font-size:1.1rem; line-height:1.5; }
+    .class-selection button { background:#ffa500; color:#000; border:none; padding:15px 30px; font-size:1.2rem; font-weight:bold; border-radius:10px; cursor:pointer; margin:10px; transition:background-color .2s, transform .2s; }
+    .class-selection button:hover { background:#ffc864; transform:scale(1.05); }
+    #crosshair { position:fixed; top:50%; left:50%; width:4px; height:4px; background:#fff; border-radius:50%; transform:translate(-50%,-50%); pointer-events:none; z-index:9; mix-blend-mode:difference; display:none; }
+  </style>
 </head>
 <body>
-    <div id="blocker">
-        <div id="instructions">
-            <div id="menu-content">
-                 <h2>Choisissez votre classe</h2>
-                 <div class="class-selection">
-                    <button id="btnWarrior">Guerrier</button>
-                    <button id="btnMage">Mage</button>
-                 </div>
-                 <p style="margin-top: 20px;">Appuyez sur Échap pour changer de classe.</p>
-            </div>
+  <div id="blocker">
+    <div id="instructions">
+      <div id="menu-content">
+        <h2>Choisissez votre classe</h2>
+        <div class="class-selection">
+          <button id="btnWarrior">Guerrier</button>
+          <button id="btnMage">Mage</button>
         </div>
+        <div style="margin-top:12px">
+          <input id="roomCode" placeholder="Code de room (ex: ABCD)" maxlength="12" />
+          <button id="btnCreate">Créer</button>
+          <button id="btnJoin">Rejoindre</button>
+        </div>
+        <p style="margin-top:20px;">Appuyez sur Échap pour changer de classe.</p>
+      </div>
     </div>
-    <div id="crosshair"></div>
+  </div>
+  <div id="crosshair"></div>
 
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-            }
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+    import * as THREE from 'three';
+    import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+    // === Supabase (remplace si besoin) ===
+    const SUPABASE_URL = 'https://ywxeflymtbyorqcirqiq.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl3eGVmbHltdGJ5b3JxY2lycWlxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg2NzkzNDIsImV4cCI6MjA3NDI1NTM0Mn0.mCucqm8nJ_c-ZaPR6ZpxZhF9qaufrphk4lLNpho728Y';
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let channel = null;                    // room realtime
+    const myId = crypto.randomUUID();      // id client
+    const peers = new Map();               // peerId -> {pos, rot}
+    const peerGhosts = new Map();          // peerId -> THREE.Mesh (ghost visuel)
+
+    function randomCode(){ return Math.random().toString(36).slice(2,6).toUpperCase(); }
+
+    // Fabrique un ghost (sphère bleue brillante)
+    function createGhostAt(pos){
+      const ghost = new THREE.Mesh(
+        new THREE.SphereGeometry(0.3, 16, 16),
+        new THREE.MeshStandardMaterial({ color: 0x00aaff, emissive: 0x004466, emissiveIntensity: 0.6 })
+      );
+      ghost.position.set(pos.x, pos.y, pos.z);
+      // petite “tête” pour l’orientation (facultatif)
+      const head = new THREE.Mesh(
+        new THREE.SphereGeometry(0.15, 12, 12),
+        new THREE.MeshStandardMaterial({ color: 0x66ddff, emissive: 0x004466, emissiveIntensity: 0.5 })
+      );
+      head.position.set(0, 0.35, 0);
+      ghost.add(head);
+      scene.add(ghost);
+      return ghost;
+    }
+
+    async function joinRoom(code){
+      // Nettoyage visuel si on change de room
+      peerGhosts.forEach(mesh => scene.remove(mesh));
+      peerGhosts.clear();
+      peers.clear();
+
+      if (channel) await supabase.removeChannel(channel);
+
+      channel = supabase.channel(`room:${code}`, { config: { presence: { key: myId } } });
+
+      // Presence: sync global (peut servir à lister les connectés)
+      channel.on('presence', { event:'sync' }, () => {
+        // const state = channel.presenceState();
+        // console.log('presence sync', state);
+      });
+
+      // Un joueur part -> on supprime son ghost
+      channel.on('presence', { event: 'leave' }, ({ key }) => {
+        const ghost = peerGhosts.get(key);
+        if (ghost) { scene.remove(ghost); peerGhosts.delete(key); }
+        peers.delete(key);
+      });
+
+      // Réception des états (pos/rot) des autres
+      channel.on('broadcast', { event:'state' }, ({ payload }) => {
+        const { id, pos, rot } = payload;
+        if (id === myId) return;
+
+        // stocke dernière position/rotation
+        peers.set(id, { pos, rot });
+
+        // crée le ghost si besoin
+        if (!peerGhosts.has(id)) {
+          const ghost = createGhostAt(pos);
+          peerGhosts.set(id, ghost);
         }
-    </script>
+      });
 
-    <script type="module">
-        import * as THREE from 'three';
-        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+      await channel.subscribe((status) => {
+        if (status === 'SUBSCRIBED') channel.track({ id: myId, joinedAt: Date.now() });
+      });
+    }
 
-        let scene, camera, renderer, controls;
-        let playerVelocity = new THREE.Vector3();
-        let playerDirection = new THREE.Vector3();
-        
-        let moveForward = false;
-        let moveBackward = false;
-        let moveLeft = false;
-        let moveRight = false;
-        let canJump = false;
+    // Quitte la room proprement si on change de page / ferme l’onglet
+    window.addEventListener('pagehide', async () => {
+      try { if (channel) await supabase.removeChannel(channel); } catch {}
+    });
 
-        let objects = []; // For collision detection
-        
-        // Player Class State
-        let playerClass = null; // 'warrior' or 'mage'
+    // === Three.js / jeu ===
+    let scene, camera, renderer, controls;
+    let playerVelocity = new THREE.Vector3();
+    let playerDirection = new THREE.Vector3();
+    let moveForward=false, moveBackward=false, moveLeft=false, moveRight=false, canJump=false;
+    let objects = [];
+    let playerClass = null;
 
-        // Warrior state
-        let isAttacking = false;
-        const attackCooldown = 100;
-        let lastAttackTime = 0;
-        let isBlocking = false;
-        let isDashing = false;
-        const dashCooldown = 1500;
-        let lastDashTime = 0;
+    // Warrior
+    let isAttacking=false, lastAttackTime=0, isBlocking=false, isDashing=false, lastDashTime=0;
+    const attackCooldown=100, dashCooldown=1500;
 
-        // Mage state
-        let activeFireballs = [];
-        const fireballCooldown = 1000;
-        let lastFireballTime = 0;
-        let heldFireball = null;
-        let iceWall = null;
-        const iceWallCooldown = 10000;
-        let lastIceWallTime = 0;
-        const iceWallDuration = 5000;
-        const blinkCooldown = 3000;
-        let lastBlinkTime = 0;
+    // Mage
+    let activeFireballs=[], lastFireballTime=0, heldFireball=null, iceWall=null;
+    const fireballCooldown=1000, iceWallCooldown=10000, iceWallDuration=5000, blinkCooldown=3000;
+    let lastIceWallTime=0, lastBlinkTime=0;
 
+    // Modèle joueur
+    let swordGroup, rightArm, leftArm, shield, floor;
+    let initialSwordRotation, initialLeftArmPosition, initialLeftArmRotation;
 
-        // Player model parts
-        let swordGroup, rightArm, leftArm, shield, floor;
-        let initialSwordRotation;
-        let initialLeftArmPosition, initialLeftArmRotation;
+    // Constantes
+    const PLAYER_SPEED=60.0, PLAYER_HEIGHT=1.8, GRAVITY=30.0, JUMP_VELOCITY=10.0, DASH_STRENGTH=35.0, BLINK_DISTANCE=8.0;
 
-        // --- Game Constants ---
-        const PLAYER_SPEED = 60.0;
-        const PLAYER_HEIGHT = 1.8;
-        const GRAVITY = 30.0;
-        const JUMP_VELOCITY = 10.0;
-        const DASH_STRENGTH = 35.0;
-        const BLINK_DISTANCE = 8.0;
-        
-        const clock = new THREE.Clock();
-        
-        const crosshair = document.getElementById('crosshair');
+    const clock = new THREE.Clock();
+    const crosshair = document.getElementById('crosshair');
 
-        init();
-        animate();
+    // timestamp pour throttler l’envoi réseau
+    let lastSend = 0;
 
-        function init() {
-            // --- Scene Setup ---
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x87ceeb);
-            scene.fog = new THREE.Fog(0x87ceeb, 0, 100);
+    init();
+    animate();
 
-            // --- Camera Setup ---
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.y = PLAYER_HEIGHT;
+    function init(){
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x87ceeb);
+      scene.fog = new THREE.Fog(0x87ceeb, 0, 100);
 
-            // --- Renderer ---
-            renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
-            renderer.shadowMap.enabled = true;
-            document.body.appendChild(renderer.domElement);
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+      camera.position.y = PLAYER_HEIGHT;
 
-            // --- Lighting ---
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-            scene.add(ambientLight);
+      renderer = new THREE.WebGLRenderer({ antialias:true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.shadowMap.enabled = true;
+      document.body.appendChild(renderer.domElement);
 
-            const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
-            dirLight.position.set(-50, 50, 50);
-            dirLight.castShadow = true;
-            dirLight.shadow.camera.top = 20;
-            dirLight.shadow.camera.bottom = -20;
-            dirLight.shadow.camera.left = -20;
-            dirLight.shadow.camera.right = 20;
-            scene.add(dirLight);
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.5); scene.add(ambientLight);
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+      dirLight.position.set(-50,50,50); dirLight.castShadow = true;
+      dirLight.shadow.camera.top=20; dirLight.shadow.camera.bottom=-20; dirLight.shadow.camera.left=-20; dirLight.shadow.camera.right=20;
+      scene.add(dirLight);
 
-            // --- Controls ---
-            controls = new PointerLockControls(camera, document.body);
-            const blocker = document.getElementById('blocker');
-            const menuContent = document.getElementById('menu-content');
-            
-            function setupMenuListeners() {
-                document.getElementById('btnWarrior').addEventListener('click', (event) => selectClass(event, 'warrior'));
-                document.getElementById('btnMage').addEventListener('click', (event) => selectClass(event, 'mage'));
-            }
-            setupMenuListeners();
+      controls = new PointerLockControls(camera, document.body);
+      const blocker = document.getElementById('blocker');
+      const menuContent = document.getElementById('menu-content');
 
-            blocker.addEventListener('click', () => {
-                if (playerClass) {
-                    controls.lock();
-                }
-            });
+      function setupMenuListeners(){
+        document.getElementById('btnWarrior').addEventListener('click', (e)=>selectClass(e,'warrior'));
+        document.getElementById('btnMage').addEventListener('click', (e)=>selectClass(e,'mage'));
+      }
 
-            controls.addEventListener('lock', () => {
-                blocker.style.display = 'none';
-                crosshair.style.display = 'block';
-            });
+      function setupRoomListeners(){
+        const roomInput = document.getElementById('roomCode');
+        document.getElementById('btnCreate').addEventListener('click', async (e)=>{
+          e.stopPropagation();
+          const code = (roomInput.value || randomCode()).toUpperCase();
+          await joinRoom(code);
+          alert(`Room créée: ${code}`);
+        });
+        document.getElementById('btnJoin').addEventListener('click', async (e)=>{
+          e.stopPropagation();
+          const code = (roomInput.value || '').toUpperCase();
+          if (!code) return alert('Entre un code de room.');
+          await joinRoom(code);
+          alert(`Rejoint room: ${code}`);
+        });
+      }
 
-            controls.addEventListener('unlock', () => {
-                blocker.style.display = 'flex';
-                crosshair.style.display = 'none';
-                menuContent.innerHTML = `
-                    <h2>Choisissez votre classe</h2>
-                    <div class="class-selection">
-                       <button id="btnWarrior">Guerrier</button>
-                       <button id="btnMage">Mage</button>
-                    </div>
-                    <p style="margin-top: 20px;">Appuyez sur Échap pour changer de classe.</p>
-                `;
-                setupMenuListeners();
-            });
-            
-            document.addEventListener('pointerlockerror', () => {
-                console.error('Pointer Lock Error: The request was denied.');
-            }, false);
+      setupMenuListeners();
+      setupRoomListeners();
 
-            scene.add(controls.getObject());
-            
-            // --- World ---
-            createWorld();
-
-            // --- Event Listeners ---
-            document.addEventListener('keydown', onKeyDown);
-            document.addEventListener('keyup', onKeyUp);
-            document.addEventListener('mousedown', onMouseDown);
-            document.addEventListener('mouseup', onMouseUp);
-            window.addEventListener('resize', onWindowResize);
-            document.addEventListener('contextmenu', (event) => event.preventDefault());
+      // Ne lock que si on clique sur le fond (pas sur les boutons), et si une classe est choisie
+      blocker.addEventListener('click', (event) => { 
+        if (event.target === blocker && playerClass) {
+          controls.lock(); 
         }
+      });
 
-        function selectClass(event, chosenClass) {
-            event.stopPropagation();
-            playerClass = chosenClass;
-            cleanupPlayerModel();
-            createPlayerModel(playerClass);
-            
-            const menuContent = document.getElementById('menu-content');
-            menuContent.innerHTML = `
-                <h2>Classe : ${chosenClass === 'warrior' ? 'Guerrier' : 'Mage'}</h2>
-                <p style="font-size: 1.5rem; margin-top: 30px;">Cliquez pour commencer</p>
-            `;
+      controls.addEventListener('lock', () => {
+        blocker.style.display = 'none';
+        crosshair.style.display = 'block';
+      });
+
+      controls.addEventListener('unlock', () => {
+        blocker.style.display = 'flex';
+        crosshair.style.display = 'none';
+        menuContent.innerHTML = `
+          <h2>Choisissez votre classe</h2>
+          <div class="class-selection">
+            <button id="btnWarrior">Guerrier</button>
+            <button id="btnMage">Mage</button>
+          </div>
+          <div style="margin-top:12px">
+            <input id="roomCode" placeholder="Code de room (ex: ABCD)" maxlength="12" />
+            <button id="btnCreate">Créer</button>
+            <button id="btnJoin">Rejoindre</button>
+          </div>
+          <p style="margin-top:20px;">Appuyez sur Échap pour changer de classe.</p>
+        `;
+        // rebrancher les listeners après avoir recréé le HTML
+        setupMenuListeners();
+        setupRoomListeners();
+      });
+
+      document.addEventListener('pointerlockerror', () => console.error('Pointer Lock Error'), false);
+
+      scene.add(controls.getObject());
+      createWorld();
+
+      document.addEventListener('keydown', onKeyDown);
+      document.addEventListener('keyup', onKeyUp);
+      document.addEventListener('mousedown', onMouseDown);
+      document.addEventListener('mouseup', onMouseUp);
+      window.addEventListener('resize', onWindowResize);
+      document.addEventListener('contextmenu', (e)=>e.preventDefault());
+    }
+
+    function selectClass(event, chosenClass){
+      event.stopPropagation();
+      playerClass = chosenClass;
+      cleanupPlayerModel();
+      createPlayerModel(playerClass);
+
+      const menuContent = document.getElementById('menu-content');
+      menuContent.innerHTML = `
+        <h2>Classe : ${chosenClass === 'warrior' ? 'Guerrier' : 'Mage'}</h2>
+        <p style="font-size:1.5rem; margin-top:30px;">Cliquez pour commencer</p>
+      `;
+    }
+
+    function cleanupPlayerModel(){
+      if (rightArm){
+        if (swordGroup) rightArm.remove(swordGroup);
+        if (heldFireball) rightArm.remove(heldFireball);
+        camera.remove(rightArm);
+        swordGroup=null; heldFireball=null; rightArm=null;
+      }
+      if (leftArm){
+        if (shield) leftArm.remove(shield);
+        camera.remove(leftArm);
+        shield=null; leftArm=null;
+      }
+      if (iceWall){
+        scene.remove(iceWall);
+        objects = objects.filter(o=>o!==iceWall);
+        iceWall=null;
+      }
+    }
+
+    function createPlayerModel(className){
+      const armGeometry = new THREE.BoxGeometry(0.4, 1.2, 0.4);
+      const armMaterial = new THREE.MeshStandardMaterial({ color: 0xdeb887 });
+
+      rightArm = new THREE.Mesh(armGeometry, armMaterial);
+      rightArm.position.set(0.8, -0.7, -1.2);
+      rightArm.rotation.set(-Math.PI/2.5, 0.3, -0.2);
+      camera.add(rightArm);
+
+      leftArm = new THREE.Mesh(armGeometry, armMaterial);
+      leftArm.position.set(-0.8, -1.2, -1.2);
+      leftArm.rotation.set(-Math.PI/2.5, -0.1, 0.2);
+      camera.add(leftArm);
+
+      if (className === 'warrior'){
+        leftArm.visible = true;
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(0.05,1.5,0.2),
+          new THREE.MeshStandardMaterial({ color:0xc0c0c0, metalness:0.8, roughness:0.4 }));
+        blade.position.y = 0.75;
+        const hilt = new THREE.Mesh(new THREE.BoxGeometry(0.15,0.4,0.15),
+          new THREE.MeshStandardMaterial({ color:0x4a2c0f, roughness:0.8 }));
+        const guard = new THREE.Mesh(new THREE.BoxGeometry(0.1,0.1,0.5),
+          new THREE.MeshStandardMaterial({ color:0xdaa520, metalness:0.6, roughness:0.5 }));
+        guard.position.y = 0.25;
+        swordGroup = new THREE.Group(); swordGroup.add(blade,hilt,guard);
+        swordGroup.position.set(0,0.6,0); swordGroup.rotation.x = Math.PI/2.2;
+        initialSwordRotation = swordGroup.rotation.clone();
+        rightArm.add(swordGroup);
+
+        const shieldWood = new THREE.Mesh(new THREE.BoxGeometry(1,1.5,0.2), new THREE.MeshStandardMaterial({ color:0x8B4513 }));
+        const shieldIron = new THREE.Mesh(new THREE.BoxGeometry(1.1,1.6,0.1), new THREE.MeshStandardMaterial({ color:0x777777, metalness:0.7, roughness:0.6 }));
+        shieldIron.position.z = -0.1;
+        shield = new THREE.Group(); shield.add(shieldWood, shieldIron);
+        shield.position.set(0,0.3,0.5); shield.rotation.y = -Math.PI/12; shield.rotation.x = Math.PI/3;
+        leftArm.add(shield);
+        initialLeftArmPosition = leftArm.position.clone();
+        initialLeftArmRotation = leftArm.rotation.clone();
+
+      } else if (className === 'mage'){
+        leftArm.visible = false;
+        const fireballGeometry = new THREE.SphereGeometry(0.2,16,16);
+        const fireballMaterial = new THREE.MeshStandardMaterial({ color:0xff4500, emissive:0xff6600, emissiveIntensity:1.5 });
+        heldFireball = new THREE.Mesh(fireballGeometry, fireballMaterial);
+        const fireLight = new THREE.PointLight(0xff6600, 2, 5);
+        heldFireball.add(fireLight);
+        heldFireball.position.set(0,0.9,0.2);
+        rightArm.add(heldFireball);
+      }
+    }
+
+    function createWorld(){
+      const floorGeometry = new THREE.PlaneGeometry(200,200);
+      const floorMaterial = new THREE.MeshStandardMaterial({ color:0x228B22 });
+      floor = new THREE.Mesh(floorGeometry, floorMaterial);
+      floor.rotation.x = -Math.PI/2; floor.receiveShadow = true;
+      scene.add(floor); objects.push(floor);
+
+      const house = new THREE.Group();
+      const wallMaterial = new THREE.MeshStandardMaterial({ color:0xac8c6c });
+      const wT=0.5, wH=5, wW=10, wD=12;
+
+      const back = new THREE.Mesh(new THREE.BoxGeometry(wW,wH,wT), wallMaterial); back.position.set(0,wH/2,-wD/2); back.castShadow=true; house.add(back);
+      const left = new THREE.Mesh(new THREE.BoxGeometry(wD,wH,wT), wallMaterial); left.position.set(-wW/2,wH/2,0); left.rotation.y = Math.PI/2; left.castShadow=true; house.add(left);
+      const right = new THREE.Mesh(new THREE.BoxGeometry(wD,wH,wT), wallMaterial); right.position.set(wW/2,wH/2,0); right.rotation.y = Math.PI/2; right.castShadow=true; house.add(right);
+
+      const doorW=3, doorH=4, sideW=(wW - doorW)/2;
+      const frontL = new THREE.Mesh(new THREE.BoxGeometry(sideW,wH,wT), wallMaterial); frontL.position.set(-(doorW/2 + sideW/2), wH/2, wD/2); frontL.castShadow=true; house.add(frontL);
+      const frontR = new THREE.Mesh(new THREE.BoxGeometry(sideW,wH,wT), wallMaterial); frontR.position.set((doorW/2 + sideW/2), wH/2, wD/2); frontR.castShadow=true; house.add(frontR);
+      const frontT = new THREE.Mesh(new THREE.BoxGeometry(doorW, wH - doorH, wT), wallMaterial); frontT.position.set(0, doorH + (wH-doorH)/2, wD/2); frontT.castShadow=true; house.add(frontT);
+
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(wW*0.8,4,4), new THREE.MeshStandardMaterial({ color:0x8B4513 }));
+      roof.position.set(0,wH+1.5,0); roof.rotation.y = Math.PI/4; roof.castShadow=true; house.add(roof);
+
+      scene.add(house);
+      objects.push(...house.children);
+
+      const target = new THREE.Mesh(new THREE.BoxGeometry(1,2,1), new THREE.MeshStandardMaterial({ color:0xff0000 }));
+      target.position.set(0,1,-8); target.name="target"; target.castShadow=true;
+      scene.add(target); objects.push(target);
+    }
+
+    function onWindowResize(){ camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
+
+    function onKeyDown(e){
+      switch(e.code){
+        case 'KeyW': case 'KeyZ': moveForward = true; break;
+        case 'KeyA': case 'KeyQ': moveLeft = true; break;
+        case 'KeyS': moveBackward = true; break;
+        case 'KeyD': moveRight = true; break;
+        case 'Space': if (canJump) { playerVelocity.y += JUMP_VELOCITY; canJump=false; } break;
+        case 'ShiftLeft': {
+          const now = performance.now();
+          if (playerClass === 'warrior'){
+            if (now - lastDashTime > dashCooldown){ lastDashTime = now; isDashing = true; }
+          } else if (playerClass === 'mage'){
+            if (now - lastBlinkTime > blinkCooldown){ lastBlinkTime = now; performBlink(); }
+          }
+        } break;
+      }
+    }
+
+    function onKeyUp(e){
+      switch(e.code){
+        case 'KeyW': case 'KeyZ': moveForward=false; break;
+        case 'KeyA': case 'KeyQ': moveLeft=false; break;
+        case 'KeyS': moveBackward=false; break;
+        case 'KeyD': moveRight=false; break;
+      }
+    }
+
+    function onMouseDown(e){
+      if (!controls.isLocked) return;
+      if (playerClass === 'warrior'){
+        if (e.button===0 && !isAttacking && !isBlocking){
+          const now = performance.now();
+          if (now - lastAttackTime > attackCooldown){ isAttacking=true; lastAttackTime=now; swingSword(); }
+        } else if (e.button===2 && !isBlocking){ raiseShield(); }
+      } else if (playerClass === 'mage'){
+        if (e.button===0){
+          const now = performance.now();
+          if (now - lastFireballTime > fireballCooldown){ lastFireballTime=now; castFireball(); }
+        } else if (e.button===2){
+          const now = performance.now();
+          if (now - lastIceWallTime > iceWallCooldown){ lastIceWallTime=now; castIceWall(); }
         }
-        
-        function cleanupPlayerModel() {
-            if (rightArm) {
-                if (swordGroup) rightArm.remove(swordGroup);
-                if (heldFireball) rightArm.remove(heldFireball);
-                camera.remove(rightArm);
-                swordGroup = null;
-                heldFireball = null;
-                rightArm = null;
-            }
-            if (leftArm) {
-                if (shield) leftArm.remove(shield);
-                camera.remove(leftArm);
-                shield = null;
-                leftArm = null;
-            }
-            if (iceWall) {
-                scene.remove(iceWall);
-                objects = objects.filter(obj => obj !== iceWall);
-                iceWall = null;
-            }
+      }
+    }
+
+    function onMouseUp(e){ if (controls.isLocked && e.button===2 && playerClass==='warrior' && isBlocking) lowerShield(); }
+
+    function performBlink(){
+      const direction = new THREE.Vector3();
+      const forward = Number(moveBackward) - Number(moveForward);
+      const right = Number(moveRight) - Number(moveLeft);
+      direction.z = forward; direction.x = right;
+      if (direction.lengthSq() === 0) camera.getWorldDirection(direction);
+      else direction.applyQuaternion(camera.quaternion);
+      direction.y = 0; direction.normalize();
+      const blinkVector = direction.multiplyScalar(BLINK_DISTANCE);
+      controls.getObject().position.add(blinkVector);
+    }
+
+    function castIceWall(){
+      if (iceWall) return;
+      const wallGeometry = new THREE.BoxGeometry(8,5,0.5);
+      const wallMaterial = new THREE.MeshStandardMaterial({ color:0xadd8e6, opacity:0.8, transparent:true, metalness:0.2, roughness:0.1 });
+      iceWall = new THREE.Mesh(wallGeometry, wallMaterial); iceWall.name='iceWall';
+      const dir = new THREE.Vector3(); camera.getWorldDirection(dir); dir.y=0; dir.normalize();
+      const wallPos = controls.getObject().position.clone().add(dir.multiplyScalar(4)); wallPos.y = 2.5;
+      iceWall.position.copy(wallPos);
+      iceWall.lookAt(controls.getObject().position.x, 2.5, controls.getObject().position.z);
+      scene.add(iceWall); objects.push(iceWall);
+
+      iceWall.scale.set(1,0.01,1);
+      const duration=200, start=performance.now();
+      (function grow(){
+        const t = Math.min((performance.now()-start)/duration,1);
+        iceWall.scale.y = t;
+        if (t<1) requestAnimationFrame(grow);
+      })();
+
+      setTimeout(destroyIceWall, iceWallDuration);
+    }
+
+    function destroyIceWall(){
+      if (!iceWall) return;
+      const duration=500, start=performance.now();
+      (function fade(){
+        const t = Math.min((performance.now()-start)/duration,1);
+        if (iceWall){
+          iceWall.material.opacity = 0.8 * (1-t);
+          if (t<1) requestAnimationFrame(fade);
+          else {
+            scene.remove(iceWall);
+            objects = objects.filter(o=>o!==iceWall);
+            iceWall=null;
+          }
         }
+      })();
+    }
 
-        function createPlayerModel(className) {
-            const armGeometry = new THREE.BoxGeometry(0.4, 1.2, 0.4);
-            const armMaterial = new THREE.MeshStandardMaterial({ color: 0xdeb887 });
+    function castFireball(){
+      if (!heldFireball) return;
+      const projectile = heldFireball.clone();
+      const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
+      const startPos = new THREE.Vector3(); camera.getWorldPosition(startPos);
+      projectile.position.copy(startPos).add(dir.clone().multiplyScalar(1.5));
+      projectile.velocity = dir.normalize().multiplyScalar(35);
+      projectile.lifetime = 3;
+      scene.add(projectile);
+      activeFireballs.push(projectile);
+      heldFireball.visible = false;
+      setTimeout(()=>{ if (heldFireball) heldFireball.visible = true; }, 200);
+    }
 
-            rightArm = new THREE.Mesh(armGeometry, armMaterial);
-            rightArm.position.set(0.8, -0.7, -1.2); 
-            rightArm.rotation.set(-Math.PI / 2.5, 0.3, -0.2);
-            camera.add(rightArm);
-            
-            leftArm = new THREE.Mesh(armGeometry, armMaterial);
-            leftArm.position.set(-0.8, -1.2, -1.2);
-            leftArm.rotation.set(-Math.PI / 2.5, -0.1, 0.2);
-            camera.add(leftArm);
+    function swingSword(){
+      if (!swordGroup) return;
+      const targetX = 0;
+      const duration=50, start=performance.now();
+      (function swing(){
+        const t = Math.min((performance.now()-start)/duration,1);
+        swordGroup.rotation.x = initialSwordRotation.x + (targetX - initialSwordRotation.x) * t;
+        if (t<1) requestAnimationFrame(swing);
+        else { checkHit(); returnSword(); }
+      })();
+    }
 
+    function returnSword(){
+      if (!swordGroup) return;
+      const fromX = swordGroup.rotation.x;
+      const duration=75, start=performance.now();
+      (function back(){
+        const t = Math.min((performance.now()-start)/duration,1);
+        swordGroup.rotation.x = fromX + (initialSwordRotation.x - fromX) * t;
+        if (t<1) requestAnimationFrame(back);
+        else { swordGroup.rotation.copy(initialSwordRotation); isAttacking=false; }
+      })();
+    }
 
-            if (className === 'warrior') {
-                leftArm.visible = true;
-                const bladeGeometry = new THREE.BoxGeometry(0.05, 1.5, 0.2);
-                const bladeMaterial = new THREE.MeshStandardMaterial({ color: 0xc0c0c0, metalness: 0.8, roughness: 0.4 });
-                const blade = new THREE.Mesh(bladeGeometry, bladeMaterial);
-                blade.position.y = 0.75;
-                const hiltGeometry = new THREE.BoxGeometry(0.15, 0.4, 0.15);
-                const hiltMaterial = new THREE.MeshStandardMaterial({ color: 0x4a2c0f, roughness: 0.8 });
-                const hilt = new THREE.Mesh(hiltGeometry, hiltMaterial);
-                const guardGeometry = new THREE.BoxGeometry(0.1, 0.1, 0.5);
-                const guardMaterial = new THREE.MeshStandardMaterial({ color: 0xdaa520, metalness: 0.6, roughness: 0.5 });
-                const guard = new THREE.Mesh(guardGeometry, guardMaterial);
-                guard.position.y = 0.25;
-                swordGroup = new THREE.Group();
-                swordGroup.add(blade, hilt, guard);
-                swordGroup.position.set(0, 0.6, 0); 
-                swordGroup.rotation.x = Math.PI / 2.2;
-                initialSwordRotation = swordGroup.rotation.clone();
-                rightArm.add(swordGroup);
+    function raiseShield(){
+      if (!leftArm || !leftArm.visible) return;
+      isBlocking=true;
+      const targetPos = new THREE.Vector3(-0.4,-1.1,-1.4);
+      const startPos = leftArm.position.clone();
+      const duration=100, start=performance.now();
+      (function up(){
+        if (!isBlocking) return;
+        const t = Math.min((performance.now()-start)/duration,1);
+        leftArm.position.lerpVectors(startPos, targetPos, t);
+        if (t<1) requestAnimationFrame(up);
+      })();
+    }
 
-                const shieldWood = new THREE.Mesh(new THREE.BoxGeometry(1, 1.5, 0.2), new THREE.MeshStandardMaterial({ color: 0x8B4513 }));
-                const shieldIron = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.6, 0.1), new THREE.MeshStandardMaterial({ color: 0x777777, metalness: 0.7, roughness: 0.6 }));
-                shieldIron.position.z = -0.1;
-                shield = new THREE.Group();
-                shield.add(shieldWood, shieldIron);
-                shield.position.set(0, 0.3, 0.5);
-                shield.rotation.y = -Math.PI / 12;
-                shield.rotation.x = Math.PI / 3;
-                leftArm.add(shield);
-                initialLeftArmPosition = leftArm.position.clone();
-                initialLeftArmRotation = leftArm.rotation.clone();
+    function lowerShield(){
+      if (!leftArm || !leftArm.visible) return;
+      const startPos = leftArm.position.clone();
+      const duration=120, start=performance.now();
+      (function down(){
+        const t = Math.min((performance.now()-start)/duration,1);
+        leftArm.position.lerpVectors(startPos, initialLeftArmPosition, t);
+        if (t<1) requestAnimationFrame(down);
+        else { leftArm.position.copy(initialLeftArmPosition); isBlocking=false; }
+      })();
+    }
 
-            } else if (className === 'mage') {
-                leftArm.visible = false;
-                const fireballGeometry = new THREE.SphereGeometry(0.2, 16, 16);
-                const fireballMaterial = new THREE.MeshStandardMaterial({
-                    color: 0xff4500,
-                    emissive: 0xff6600,
-                    emissiveIntensity: 1.5,
-                });
-                heldFireball = new THREE.Mesh(fireballGeometry, fireballMaterial);
-                const fireLight = new THREE.PointLight(0xff6600, 2, 5);
-                heldFireball.add(fireLight);
-                heldFireball.position.set(0, 0.9, 0.2);
-                rightArm.add(heldFireball);
-            }
+    function checkHit(){
+      const swordTip = new THREE.Vector3(0.6,-0.2,-2.5);
+      const worldPos = swordTip.applyMatrix4(camera.matrixWorld);
+      const targets = scene.children.filter(o=>o.name==='target');
+      targets.forEach(target=>{
+        const d = worldPos.distanceTo(target.position);
+        if (d < 1.5){
+          target.material.color.set(0x00ff00);
+          setTimeout(()=>target.material.color.set(0xff0000), 300);
         }
+      });
+    }
 
-        function createWorld() {
-            const floorGeometry = new THREE.PlaneGeometry(200, 200);
-            const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22 });
-            floor = new THREE.Mesh(floorGeometry, floorMaterial);
-            floor.rotation.x = -Math.PI / 2;
-            floor.receiveShadow = true;
-            scene.add(floor);
-            objects.push(floor);
-            const house = new THREE.Group();
-            const wallMaterial = new THREE.MeshStandardMaterial({ color: 0xac8c6c });
-            const wallThickness = 0.5, wallHeight = 5, houseWidth = 10, houseDepth = 12;
-            const wallBack = new THREE.Mesh(new THREE.BoxGeometry(houseWidth, wallHeight, wallThickness), wallMaterial);
-            wallBack.position.set(0, wallHeight / 2, -houseDepth / 2); wallBack.castShadow = true;
-            house.add(wallBack);
-            const wallLeft = new THREE.Mesh(new THREE.BoxGeometry(houseDepth, wallHeight, wallThickness), wallMaterial);
-            wallLeft.position.set(-houseWidth / 2, wallHeight / 2, 0); wallLeft.rotation.y = Math.PI / 2; wallLeft.castShadow = true;
-            house.add(wallLeft);
-            const wallRight = new THREE.Mesh(new THREE.BoxGeometry(houseDepth, wallHeight, wallThickness), wallMaterial);
-            wallRight.position.set(houseWidth / 2, wallHeight / 2, 0); wallRight.rotation.y = Math.PI / 2; wallRight.castShadow = true;
-            house.add(wallRight);
-            const doorWidth = 3, doorHeight = 4;
-            const frontWallSideWidth = (houseWidth - doorWidth) / 2;
-            const wallFrontLeft = new THREE.Mesh(new THREE.BoxGeometry(frontWallSideWidth, wallHeight, wallThickness), wallMaterial);
-            wallFrontLeft.position.set(- (doorWidth / 2 + frontWallSideWidth / 2), wallHeight/2, houseDepth/2); wallFrontLeft.castShadow = true;
-            house.add(wallFrontLeft);
-            const wallFrontRight = new THREE.Mesh(new THREE.BoxGeometry(frontWallSideWidth, wallHeight, wallThickness), wallMaterial);
-            wallFrontRight.position.set((doorWidth / 2 + frontWallSideWidth / 2), wallHeight/2, houseDepth/2); wallFrontRight.castShadow = true;
-            house.add(wallFrontRight);
-            const wallFrontTop = new THREE.Mesh(new THREE.BoxGeometry(doorWidth, wallHeight - doorHeight, wallThickness), wallMaterial);
-            wallFrontTop.position.set(0, doorHeight + (wallHeight - doorHeight)/2, houseDepth/2); wallFrontTop.castShadow = true;
-            house.add(wallFrontTop);
-            const roofGeometry = new THREE.ConeGeometry(houseWidth * 0.8, 4, 4);
-            const roofMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
-            const roof = new THREE.Mesh(roofGeometry, roofMaterial);
-            roof.position.set(0, wallHeight + 1.5, 0); roof.rotation.y = Math.PI / 4; roof.castShadow = true;
-            house.add(roof);
-            scene.add(house);
-            objects.push(...house.children);
-            const targetGeometry = new THREE.BoxGeometry(1, 2, 1);
-            const targetMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
-            const target = new THREE.Mesh(targetGeometry, targetMaterial);
-            target.position.set(0, 1, -8);
-            target.name = "target";
-            target.castShadow = true;
-            scene.add(target);
-            objects.push(target);
-        }
+    function updateProjectiles(delta){
+      for (let i=activeFireballs.length-1; i>=0; i--){
+        const fb = activeFireballs[i];
+        fb.position.add(fb.velocity.clone().multiplyScalar(delta));
+        fb.lifetime -= delta;
+        let remove = false;
 
-        function onWindowResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        }
-
-        function onKeyDown(event) {
-            switch (event.code) {
-                case 'KeyW': case 'KeyZ': moveForward = true; break;
-                case 'KeyA': case 'KeyQ': moveLeft = true; break;
-                case 'KeyS': moveBackward = true; break;
-                case 'KeyD': moveRight = true; break;
-                case 'Space': if (canJump) playerVelocity.y += JUMP_VELOCITY; canJump = false; break;
-                case 'ShiftLeft':
-                    const now = performance.now();
-                    if (playerClass === 'warrior') {
-                        if (now - lastDashTime > dashCooldown) {
-                            lastDashTime = now;
-                            isDashing = true;
-                        }
-                    } else if (playerClass === 'mage') {
-                        if (now - lastBlinkTime > blinkCooldown) {
-                            lastBlinkTime = now;
-                            performBlink();
-                        }
-                    }
-                    break;
-            }
-        }
-
-        function onKeyUp(event) {
-            switch (event.code) {
-                case 'KeyW': case 'KeyZ': moveForward = false; break;
-                case 'KeyA': case 'KeyQ': moveLeft = false; break;
-                case 'KeyS': moveBackward = false; break;
-                case 'KeyD': moveRight = false; break;
-            }
-        }
-        
-        function onMouseDown(event) {
-            if (controls.isLocked) {
-                if (playerClass === 'warrior') {
-                    if (event.button === 0 && !isAttacking && !isBlocking) {
-                        const now = performance.now();
-                        if (now - lastAttackTime > attackCooldown) {
-                            isAttacking = true;
-                            lastAttackTime = now;
-                            swingSword();
-                        }
-                    } else if (event.button === 2 && !isBlocking) {
-                        raiseShield();
-                    }
-                }
-                else if (playerClass === 'mage') {
-                    if (event.button === 0) {
-                        const now = performance.now();
-                        if (now - lastFireballTime > fireballCooldown) {
-                            lastFireballTime = now;
-                            castFireball();
-                        }
-                    } else if (event.button === 2) { // Right-click for Mage
-                        const now = performance.now();
-                        if (now - lastIceWallTime > iceWallCooldown) {
-                            lastIceWallTime = now;
-                            castIceWall();
-                        }
-                    }
-                }
-            }
-        }
-
-        function onMouseUp(event) {
-            if (controls.isLocked && event.button === 2 && playerClass === 'warrior' && isBlocking) {
-                lowerShield();
-            }
-        }
-
-        function performBlink() {
-            const direction = new THREE.Vector3();
-            // Correction : Dans l'espace local de Three.js, "avancer" se fait sur l'axe Z négatif.
-            const forward = Number(moveBackward) - Number(moveForward);
-            const right = Number(moveRight) - Number(moveLeft);
-            
-            direction.z = forward;
-            direction.x = right;
-            
-            // Si aucune touche de mouvement n'est pressée, on se téléporte dans la direction de la caméra
-            if (direction.lengthSq() === 0) {
-                camera.getWorldDirection(direction);
-            } else {
-                // Sinon, on transforme la direction du mouvement en l'orientant selon la caméra
-                direction.applyQuaternion(camera.quaternion);
-            }
-
-            direction.y = 0; // On ne se téléporte pas verticalement
-            direction.normalize();
-            
-            const blinkVector = direction.multiplyScalar(BLINK_DISTANCE);
-            controls.getObject().position.add(blinkVector);
-        }
-        
-        function castIceWall() {
-            if (iceWall) return;
-
-            const wallGeometry = new THREE.BoxGeometry(8, 5, 0.5);
-            const wallMaterial = new THREE.MeshStandardMaterial({
-                color: 0xadd8e6,
-                opacity: 0.8,
-                transparent: true,
-                metalness: 0.2,
-                roughness: 0.1
-            });
-            iceWall = new THREE.Mesh(wallGeometry, wallMaterial);
-            iceWall.name = "iceWall";
-
-            const direction = new THREE.Vector3();
-            camera.getWorldDirection(direction);
-            direction.y = 0;
-            direction.normalize();
-
-            const wallPosition = controls.getObject().position.clone().add(direction.multiplyScalar(4));
-            wallPosition.y = 2.5;
-            iceWall.position.copy(wallPosition);
-
-            iceWall.lookAt(controls.getObject().position.x, 2.5, controls.getObject().position.z);
-
-            scene.add(iceWall);
-            objects.push(iceWall);
-
-            iceWall.scale.set(1, 0.01, 1);
-            const targetScaleY = 1;
-            const duration = 200;
-            const startTime = performance.now();
-
-            function animateSpawn() {
-                const elapsed = performance.now() - startTime;
-                const progress = Math.min(elapsed / duration, 1);
-                iceWall.scale.y = progress * targetScaleY;
-                if (progress < 1) {
-                    requestAnimationFrame(animateSpawn);
-                }
-            }
-            animateSpawn();
-
-            setTimeout(destroyIceWall, iceWallDuration);
-        }
-
-        function destroyIceWall() {
-            if (!iceWall) return;
-            
-            const duration = 500;
-            const startTime = performance.now();
-
-            function animateDestroy() {
-                const elapsed = performance.now() - startTime;
-                const progress = Math.min(elapsed / duration, 1);
-                
-                if (iceWall) {
-                    iceWall.material.opacity = 0.8 * (1 - progress);
-                    if (progress < 1) {
-                        requestAnimationFrame(animateDestroy);
-                    } else {
-                        scene.remove(iceWall);
-                        objects = objects.filter(obj => obj !== iceWall);
-                        iceWall = null;
-                    }
-                }
-            }
-            animateDestroy();
-        }
-
-        function castFireball() {
-            if (!heldFireball) return;
-            const projectile = heldFireball.clone();
-            const projectileDirection = new THREE.Vector3();
-            camera.getWorldDirection(projectileDirection);
-            const startPosition = new THREE.Vector3();
-            camera.getWorldPosition(startPosition);
-            projectile.position.copy(startPosition).add(projectileDirection.clone().multiplyScalar(1.5));
-            projectile.velocity = projectileDirection.normalize().multiplyScalar(35);
-            projectile.lifetime = 3;
-            scene.add(projectile);
-            activeFireballs.push(projectile);
-            heldFireball.visible = false;
-            setTimeout(() => {
-                if (heldFireball) heldFireball.visible = true;
-            }, 200);
-        }
-
-        function swingSword() {
-            if (!swordGroup) return;
-            const targetSwordRotationX = 0;
-            const duration = 50; 
-            const startTime = performance.now();
-            function animateSwing() {
-                const now = performance.now();
-                const elapsed = now - startTime;
-                const progress = Math.min(elapsed / duration, 1);
-                swordGroup.rotation.x = initialSwordRotation.x + (targetSwordRotationX - initialSwordRotation.x) * progress;
-                if (progress < 1) {
-                    requestAnimationFrame(animateSwing);
-                } else {
-                    checkHit();
-                    returnSword();
-                }
-            }
-            animateSwing();
-        }
-
-        function returnSword() {
-            if (!swordGroup) return;
-            const currentSwordRotationX = swordGroup.rotation.x;
-            const duration = 75;
-            const startTime = performance.now();
-            function animateReturn() {
-                 const now = performance.now();
-                 const elapsed = now - startTime;
-                 const progress = Math.min(elapsed / duration, 1);
-                 swordGroup.rotation.x = currentSwordRotationX + (initialSwordRotation.x - currentSwordRotationX) * progress;
-                 if (progress < 1) {
-                     requestAnimationFrame(animateReturn);
-                 } else {
-                    swordGroup.rotation.copy(initialSwordRotation);
-                    isAttacking = false;
-                 }
-            }
-            animateReturn();
+        if (iceWall){
+          const wallBB = new THREE.Box3().setFromObject(iceWall);
+          const fbBB = new THREE.Box3().setFromObject(fb);
+          if (wallBB.intersectsBox(fbBB)) remove = true;
         }
 
-        function raiseShield() {
-            if (!leftArm || !leftArm.visible) return;
-            isBlocking = true;
-            const targetPos = new THREE.Vector3(-0.4, -1.1, -1.4);
-            const startPos = leftArm.position.clone();
-            const duration = 100;
-            const startTime = performance.now();
-            function animateBlock() {
-                if (!isBlocking) return;
-                const elapsed = performance.now() - startTime;
-                const progress = Math.min(elapsed / duration, 1);
-                leftArm.position.lerpVectors(startPos, targetPos, progress);
-                if (progress < 1) {
-                    requestAnimationFrame(animateBlock);
-                }
-            }
-            animateBlock();
+        const target = scene.getObjectByName('target');
+        if (target && fb.position.distanceTo(target.position) < 1.5){
+          target.material.color.set(0x00ff00);
+          setTimeout(()=>target.material.color.set(0xff0000), 300);
+          remove = true;
         }
 
-        function lowerShield() {
-            if (!leftArm || !leftArm.visible) return;
-            const startPos = leftArm.position.clone();
-            const duration = 120;
-            const startTime = performance.now();
-            function animateUnblock() {
-                const elapsed = performance.now() - startTime;
-                const progress = Math.min(elapsed / duration, 1);
-                leftArm.position.lerpVectors(startPos, initialLeftArmPosition, progress);
-                if (progress < 1) {
-                    requestAnimationFrame(animateUnblock);
-                } else {
-                    leftArm.position.copy(initialLeftArmPosition);
-                    isBlocking = false;
-                }
-            }
-            animateUnblock();
-        }
+        if (fb.lifetime <= 0) remove = true;
+        if (remove){ scene.remove(fb); activeFireballs.splice(i,1); }
+      }
+    }
 
-        function checkHit() {
-            const swordTip = new THREE.Vector3(0.6, -0.2, -2.5);
-            const swordWorldPosition = swordTip.applyMatrix4(camera.matrixWorld);
-            const targets = scene.children.filter(obj => obj.name === 'target');
-            targets.forEach(target => {
-                const distance = swordWorldPosition.distanceTo(target.position);
-                if (distance < 1.5) {
-                    target.material.color.set(0x00ff00);
-                    setTimeout(() => {
-                        target.material.color.set(0xff0000);
-                    }, 300);
-                }
-            });
-        }
-        
-        function updateProjectiles(delta) {
-            for (let i = activeFireballs.length - 1; i >= 0; i--) {
-                const fireball = activeFireballs[i];
-                fireball.position.add(fireball.velocity.clone().multiplyScalar(delta));
-                fireball.lifetime -= delta;
+    function updatePlayer(delta){
+      if (!controls.isLocked) return;
 
-                let shouldRemove = false;
+      playerDirection.z = Number(moveForward) - Number(moveBackward);
+      playerDirection.x = Number(moveRight) - Number(moveLeft);
 
-                if (iceWall) {
-                    const wallCollider = new THREE.Box3().setFromObject(iceWall);
-                    const fireballCollider = new THREE.Box3().setFromObject(fireball);
-                    if (wallCollider.intersectsBox(fireballCollider)) {
-                         shouldRemove = true;
-                    }
-                }
+      if (isDashing){
+        const dashDir = playerDirection.clone();
+        if (dashDir.lengthSq()===0) dashDir.z = 1;
+        dashDir.normalize();
+        playerVelocity.z -= dashDir.z * DASH_STRENGTH;
+        playerVelocity.x -= dashDir.x * DASH_STRENGTH;
+        isDashing = false;
+      }
 
-                const target = scene.getObjectByName("target");
-                if (target && fireball.position.distanceTo(target.position) < 1.5) {
-                     target.material.color.set(0x00ff00);
-                     setTimeout(() => { target.material.color.set(0xff0000); }, 300);
-                     shouldRemove = true;
-                }
+      const speedDelta = PLAYER_SPEED * delta;
+      playerVelocity.x -= playerVelocity.x * 5.0 * delta;
+      playerVelocity.z -= playerVelocity.z * 5.0 * delta;
 
-                if (fireball.lifetime <= 0) {
-                    shouldRemove = true;
-                }
-                
-                if (shouldRemove) {
-                    scene.remove(fireball);
-                    activeFireballs.splice(i, 1);
-                }
-            }
-        }
+      playerDirection.normalize();
+      if (moveForward || moveBackward) playerVelocity.z -= playerDirection.z * speedDelta;
+      if (moveLeft || moveRight)      playerVelocity.x -= playerDirection.x * speedDelta;
 
-        function updatePlayer(delta) {
-             if (!controls.isLocked) return;
-            playerDirection.z = Number(moveForward) - Number(moveBackward);
-            playerDirection.x = Number(moveRight) - Number(moveLeft);
-            if (isDashing) {
-                const dashDirection = playerDirection.clone();
-                if (dashDirection.lengthSq() === 0) {
-                    dashDirection.z = 1;
-                }
-                dashDirection.normalize();
-                playerVelocity.z -= dashDirection.z * DASH_STRENGTH;
-                playerVelocity.x -= dashDirection.x * DASH_STRENGTH;
-                isDashing = false;
-            }
-            const speedDelta = PLAYER_SPEED * delta;
-            playerVelocity.x -= playerVelocity.x * 5.0 * delta;
-            playerVelocity.z -= playerVelocity.z * 5.0 * delta;
-            playerDirection.normalize(); 
-            if (moveForward || moveBackward) playerVelocity.z -= playerDirection.z * speedDelta;
-            if (moveLeft || moveRight) playerVelocity.x -= playerDirection.x * speedDelta;
-            const playerCollider = new THREE.Box3();
-            const playerSize = new THREE.Vector3(0.8, PLAYER_HEIGHT, 0.8);
-            controls.moveRight(-playerVelocity.x * delta);
-            playerCollider.setFromCenterAndSize(controls.getObject().position, playerSize);
-            for (const object of objects) {
-                if (object === floor) continue;
-                const objectCollider = new THREE.Box3().setFromObject(object);
-                if (playerCollider.intersectsBox(objectCollider)) {
-                    controls.moveRight(playerVelocity.x * delta);
-                    playerVelocity.x = 0;
-                    break;
-                }
-            }
-            controls.moveForward(-playerVelocity.z * delta);
-            playerCollider.setFromCenterAndSize(controls.getObject().position, playerSize);
-            for (const object of objects) {
-                if (object === floor) continue;
-                const objectCollider = new THREE.Box3().setFromObject(object);
-                if (playerCollider.intersectsBox(objectCollider)) {
-                    controls.moveForward(playerVelocity.z * delta);
-                    playerVelocity.z = 0;
-                    break;
-                }
-            }
-            playerVelocity.y -= GRAVITY * delta;
-            controls.getObject().position.y += playerVelocity.y * delta;
-            if (controls.getObject().position.y < PLAYER_HEIGHT) {
-                playerVelocity.y = 0;
-                controls.getObject().position.y = PLAYER_HEIGHT;
-                canJump = true;
-            }
-        }
-        
-        function animate() {
-            requestAnimationFrame(animate);
-            const delta = clock.getDelta();
-            if (playerClass) { 
-                 updatePlayer(delta);
-            }
-            updateProjectiles(delta);
-            renderer.render(scene, camera);
-        }
+      const playerCollider = new THREE.Box3();
+      const playerSize = new THREE.Vector3(0.8, PLAYER_HEIGHT, 0.8);
 
-    </script>
+      controls.moveRight(-playerVelocity.x * delta);
+      playerCollider.setFromCenterAndSize(controls.getObject().position, playerSize);
+      for (const object of objects){
+        if (object === floor) continue;
+        const bb = new THREE.Box3().setFromObject(object);
+        if (playerCollider.intersectsBox(bb)){ controls.moveRight(playerVelocity.x * delta); playerVelocity.x=0; break; }
+      }
+
+      controls.moveForward(-playerVelocity.z * delta);
+      playerCollider.setFromCenterAndSize(controls.getObject().position, playerSize);
+      for (const object of objects){
+        if (object === floor) continue;
+        const bb = new THREE.Box3().setFromObject(object);
+        if (playerCollider.intersectsBox(bb)){ controls.moveForward(playerVelocity.z * delta); playerVelocity.z=0; break; }
+      }
+
+      playerVelocity.y -= GRAVITY * delta;
+      controls.getObject().position.y += playerVelocity.y * delta;
+      if (controls.getObject().position.y < PLAYER_HEIGHT){
+        playerVelocity.y = 0;
+        controls.getObject().position.y = PLAYER_HEIGHT;
+        canJump = true;
+      }
+    }
+
+    function animate(){
+      requestAnimationFrame(animate);
+      const delta = clock.getDelta();
+
+      if (playerClass) updatePlayer(delta);
+      updateProjectiles(delta);
+
+      // Interpolation des ghosts vers leur dernière position connue
+      peerGhosts.forEach((mesh, id) => {
+        const data = peers.get(id);
+        if (!data) return;
+        const { pos } = data;
+        mesh.position.lerp(new THREE.Vector3(pos.x, pos.y, pos.z), 0.2);
+      });
+
+      // Envoi d’état aux autres (≈10/s)
+      const now = performance.now();
+      if (channel && now - lastSend > 100){
+        lastSend = now;
+        const p = controls.getObject().position;
+        const r = camera.rotation; // (tu peux passer en quaternion si tu veux)
+        channel.send({
+          type: 'broadcast',
+          event: 'state',
+          payload: {
+            id: myId,
+            pos: { x: p.x, y: p.y, z: p.z },
+            rot: { x: r.x, y: r.y, z: r.z }
+          }
+        });
+      }
+
+      renderer.render(scene, camera);
+    }
+  </script>
 </body>
 </html>
-
-
