@@ -141,6 +141,7 @@
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     let channel = null;
+    let currentRoomCode = null;
 
     const myId = crypto.randomUUID();
     const peers = new Map();
@@ -152,6 +153,16 @@
     function v3FromJSON(o){ return new THREE.Vector3(o.x, o.y, o.z); }
     function qFromJSON(o){ return new THREE.Quaternion(o.x, o.y, o.z, o.w); }
     function randomCode(){ return Math.random().toString(36).slice(2,6).toUpperCase(); }
+
+    function updateURLWithRoom(code) {
+      const url = new URL(window.location);
+      url.searchParams.set('room', code);
+      window.history.pushState({}, '', url);
+    }
+    
+    function getRoomFromURL() {
+      return new URLSearchParams(window.location.search).get('room');
+    }
 
     function createRemotePlayerAvatar(data) {
       const { pos, playerClass } = data;
@@ -222,10 +233,12 @@
       scene.add(avatarGroup);
       objects.push(avatarGroup);
 
-      return { mesh: avatarGroup, lastAction: 'idle', playerClass: data.playerClass };
+      return { mesh: avatarGroup, lastAction: 'idle', playerClass: data.playerClass, isDead: false };
     }
 
     async function joinRoom(code){
+      if (currentRoomCode === code) return;
+
       peerAvatars.forEach(avatar => {
         scene.remove(avatar.mesh);
         objects = objects.filter(o => o !== avatar.mesh);
@@ -234,6 +247,9 @@
       peers.clear();
 
       if (channel) await supabase.removeChannel(channel);
+      
+      currentRoomCode = code;
+      updateURLWithRoom(code);
 
       channel = supabase.channel(`room:${code}`, { config: { presence: { key: myId } } });
 
@@ -243,8 +259,7 @@
             replicatedObjects.forEach(obj => {
               if (obj.ownerId === myId) {
                 channel.send({
-                  type: 'broadcast',
-                  event: 'game_event',
+                  type: 'broadcast', event: 'game_event',
                   payload: obj.getSpawnPayload()
                 });
               }
@@ -264,7 +279,7 @@
           peers.delete(pres.key);
         }
       });
-
+      
       channel.on('broadcast', { event: 'hit' }, ({ payload }) => {
         if (payload.targetId === myId) takeDamage(payload.damage);
       });
@@ -274,11 +289,11 @@
         handleGameEvent(payload);
       });
 
-      channel.on('broadcast', { event: 'state' }, ({ payload }) => {
-        const { id, pos, rot, playerClass, action } = payload;
+      channel.on('broadcast', { event:'state' }, ({ payload }) => {
+        const { id, pos, rot, playerClass, action, hp } = payload;
         if (id === myId) return;
 
-        peers.set(id, { pos, rot, playerClass, action });
+        peers.set(id, { pos, rot, playerClass, action, hp });
 
         const existingAvatar = peerAvatars.get(id);
         if (existingAvatar && existingAvatar.playerClass !== playerClass) {
@@ -286,7 +301,7 @@
           objects = objects.filter(o => o !== existingAvatar.mesh);
           const newAvatar = createRemotePlayerAvatar({ pos, playerClass });
           peerAvatars.set(id, newAvatar);
-        } else if (!existingAvatar) {
+        } else if (!existingAvatar && hp > 0) { // Only spawn if not dead
           const newAvatar = createRemotePlayerAvatar({ pos, playerClass });
           peerAvatars.set(id, newAvatar);
         }
@@ -314,7 +329,7 @@
     let lastFireballTime=0, heldFireball=null;
     const fireballCooldown=1000, iceWallCooldown=10000, blinkCooldown=3000;
     let lastIceWallTime=0, lastBlinkTime=0;
-
+    
     let swordGroup, rightArm, leftArm, shield, floor;
     let initialSwordRotation, initialLeftArmPosition, initialLeftArmRotation;
 
@@ -330,8 +345,7 @@
     let lastSend = 0;
 
     init();
-    animate();
-
+    
     function init(){
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x87ceeb);
@@ -362,6 +376,11 @@
       const blocker = document.getElementById('blocker');
 
       buildMainMenu();
+      const initialRoom = getRoomFromURL();
+      if (initialRoom) {
+        document.getElementById('roomCode').value = initialRoom;
+      }
+
 
       blocker.addEventListener('click', (event) => {
         if (event.target === blocker && playerClass) controls.lock();
@@ -391,32 +410,39 @@
       document.addEventListener('mouseup', onMouseUp);
       window.addEventListener('resize', onWindowResize);
       document.addEventListener('contextmenu', (e)=>e.preventDefault());
+      
+      animate();
     }
 
     function buildMainMenu(isDeath = false) {
-      const menuContent = document.getElementById('menu-content');
-      const title = isDeath ? "Vous êtes mort." : "Menu Principal";
-      const subtitle = isDeath ? "Choisissez une classe pour réapparaître." : "Choisissez votre classe ou rejoignez une partie.";
+        const menuContent = document.getElementById('menu-content');
+        const title = isDeath ? "Vous êtes mort." : "Menu Principal";
+        const subtitle = isDeath ? "Choisissez une classe pour réapparaître." : "Choisissez votre classe ou rejoignez une partie.";
 
-      menuContent.innerHTML = `
-        <h2>${title}</h2>
-        <p>${subtitle}</p>
-        <div class="class-selection">
-          <button id="btnWarrior">Guerrier</button>
-          <button id="btnMage">Mage</button>
-        </div>
-        <div style="margin-top:12px">
-          <input id="roomCode" placeholder="Code de room (ex: ABCD)" maxlength="12" />
-          <button id="btnCreate">Créer</button>
-          <button id="btnJoin">Rejoindre</button>
-        </div>
-        <p style="margin-top:20px;">Appuyez sur Échap pour retourner au jeu.</p>
-      `;
+        menuContent.innerHTML = `
+          <h2>${title}</h2>
+          <p>${subtitle}</p>
+          <div class="class-selection">
+            <button id="btnWarrior">Guerrier</button>
+            <button id="btnMage">Mage</button>
+          </div>
+          <div style="margin-top:12px">
+            <input id="roomCode" placeholder="Code de room (ex: ABCD)" maxlength="12" />
+            <button id="btnCreate">Créer</button>
+            <button id="btnJoin">Rejoindre</button>
+          </div>
+          <p style="margin-top:20px;">Appuyez sur Échap pour retourner au jeu.</p>
+        `;
 
-      setupMenuListeners();
-      setupRoomListeners();
+        setupMenuListeners();
+        setupRoomListeners();
+        
+        const roomInput = document.getElementById('roomCode');
+        if (currentRoomCode) {
+            roomInput.value = currentRoomCode;
+        }
     }
-
+    
     function setupMenuListeners(){
       document.getElementById('btnWarrior').addEventListener('click', (e)=>selectClass(e,'warrior'));
       document.getElementById('btnMage').addEventListener('click', (e)=>selectClass(e,'mage'));
@@ -450,7 +476,7 @@
       updateHealthUI();
       cleanupPlayerModel();
       createPlayerModel(playerClass);
-
+      
       controls.getObject().position.set(0, PLAYER_HEIGHT, 5);
       playerVelocity.set(0,0,0);
 
@@ -459,8 +485,13 @@
         <h2>Classe : ${chosenClass === 'warrior' ? 'Guerrier' : 'Mage'}</h2>
         <p style="font-size:1.5rem; margin-top:30px;">Cliquez pour commencer</p>
       `;
+      
+      const roomToJoin = getRoomFromURL();
+      if(roomToJoin && !channel) {
+          joinRoom(roomToJoin);
+      }
     }
-
+    
     function cleanupPlayerModel(){
       if (rightArm){
         if (swordGroup) rightArm.remove(swordGroup);
@@ -710,7 +741,7 @@
 
     function performBlink(){
       const direction = new THREE.Vector3();
-      const forward = Number(moveBackward) - Number(moveForward);
+      const forward = Number(moveForward) - Number(moveBackward);
       const right = Number(moveRight) - Number(moveLeft);
       direction.z = forward;
       direction.x = right;
@@ -1016,7 +1047,7 @@
 
       const moveDirection = new THREE.Vector3(
         Number(moveRight) - Number(moveLeft), 0,
-        Number(moveBackward) - Number(moveForward)
+        Number(moveForward) - Number(moveBackward)
       );
 
       const deceleration = (PLAYER_SPEED / DECELERATION_TIME) * delta;
@@ -1038,8 +1069,7 @@
 
       if (isDashing){
         const dashImpulse = new THREE.Vector3(
-          (Number(moveRight) - Number(moveLeft)), 0,
-          (Number(moveBackward) - Number(moveForward))
+          (Number(moveRight) - Number(moveLeft)), 0, (Number(moveForward) - Number(moveBackward))
         );
         if(dashImpulse.lengthSq() === 0) dashImpulse.z = -1;
         dashImpulse.applyQuaternion(camera.quaternion).normalize();
